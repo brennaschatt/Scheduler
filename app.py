@@ -1,6 +1,5 @@
 from shiny import App, reactive, render, ui
 import pandas as pd
-import os
 from ortools.sat.python import cp_model
 try:
     import anthropic as _anthropic_mod
@@ -23,7 +22,7 @@ DAYS            = ALL_DAYS  # kept for backwards compat; filtered at runtime
 SHIFT_TYPES     = ["AM", "PM"]
 HOURS_PER_SHIFT = 6
 DAY_ORDER       = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-MAX_EMPLOYEES   = 30
+MAX_EMPLOYEES   = 100
 
 # All possible shift IDs (across all 7 days)
 ALL_SHIFTS = [f"{d}_{s}" for d in ALL_DAYS for s in SHIFT_TYPES]
@@ -32,18 +31,18 @@ ALL_SHIFTS = [f"{d}_{s}" for d in ALL_DAYS for s in SHIFT_TYPES]
 # Pre-built valid schedule using the sample employee dataset.
 # Replaced the moment the manager clicks Generate Schedule.
 _DEFAULT_SCHED_ROWS = [
-    {"Shift":"Mon_AM","Day":"Mon","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Steve (Lead Server), Brenda (Server), Bo (Server), Hector (Server), John (Host)"},
-    {"Shift":"Mon_PM","Day":"Mon","Shift Type":"PM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Billy (Server), Bailey (Server), Holly (Server), Jane (Host)"},
-    {"Shift":"Tue_AM","Day":"Tue","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Brian (Lead Server), Brenda (Server), Bailey (Server), Hector (Server), Kevin (Host)"},
-    {"Shift":"Tue_PM","Day":"Tue","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Steve (Lead Server), Billy (Server), Bo (Server), Holly (Server), Kim (Host)"},
-    {"Shift":"Wed_AM","Day":"Wed","Shift Type":"AM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Brenda (Server), Bo (Server), Holly (Server), Leo (Host)"},
-    {"Shift":"Wed_PM","Day":"Wed","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Brian (Lead Server), Billy (Server), Bailey (Server), Hector (Server), Lily (Host)"},
-    {"Shift":"Thu_AM","Day":"Thu","Shift Type":"AM","# Staff":6,"Workers":"Sandra (Manager), Steve (Lead Server), Brenda (Server), Bailey (Server), Holly (Server), John (Host)"},
-    {"Shift":"Thu_PM","Day":"Thu","Shift Type":"PM","# Staff":6,"Workers":"Maggie (Manager), Brian (Lead Server), Billy (Server), Bo (Server), Hector (Server), Jane (Host)"},
-    {"Shift":"Fri_AM","Day":"Fri","Shift Type":"AM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Brenda (Server), Bo (Server), Holly (Server), Kevin (Host)"},
-    {"Shift":"Fri_PM","Day":"Fri","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Brian (Lead Server), Billy (Server), Bailey (Server), Hector (Server), Kim (Host)"},
-    {"Shift":"Sat_AM","Day":"Sat","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Steve (Lead Server), Brenda (Server), Bailey (Server), Hector (Server), Leo (Host)"},
-    {"Shift":"Sat_PM","Day":"Sat","Shift Type":"PM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Billy (Server), Bo (Server), Holly (Server), Lily (Host)"},
+    {"Shift":"Mon_AM","Day":"Mon","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Steve (Lead Server), Brenda (Server), Bo (Server), Hector (Server), John (Host)","Available (Not Scheduled)":"Morgan, Sandra, Sarah, Brian, Billy, Bailey, Holly, Jane, Kevin, Kim, Leo, Lily"},
+    {"Shift":"Mon_PM","Day":"Mon","Shift Type":"PM","# Staff":6,"Workers":"Morgan (Manager), Brian (Lead Server), Billy (Server), Bailey (Server), Holly (Server), Jane (Host)","Available (Not Scheduled)":"Maggie, Sandra, Steve, Sarah, Brenda, Bo, Hector, John, Kevin, Kim, Leo, Lily"},
+    {"Shift":"Tue_AM","Day":"Tue","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Brian (Lead Server), Brenda (Server), Bailey (Server), Hector (Server), Kevin (Host)","Available (Not Scheduled)":"Morgan, Sandra, Steve, Sarah, Billy, Bo, Holly, John, Jane, Kim, Leo, Lily"},
+    {"Shift":"Tue_PM","Day":"Tue","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Steve (Lead Server), Billy (Server), Bo (Server), Holly (Server), Kim (Host)","Available (Not Scheduled)":"Maggie, Morgan, Sarah, Brian, Brenda, Bailey, Hector, John, Jane, Kevin, Leo, Lily"},
+    {"Shift":"Wed_AM","Day":"Wed","Shift Type":"AM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Brenda (Server), Bo (Server), Holly (Server), Leo (Host)","Available (Not Scheduled)":"Maggie, Sandra, Steve, Brian, Billy, Bailey, Hector, John, Jane, Kevin, Kim, Lily"},
+    {"Shift":"Wed_PM","Day":"Wed","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Brian (Lead Server), Billy (Server), Bailey (Server), Hector (Server), Lily (Host)","Available (Not Scheduled)":"Maggie, Morgan, Steve, Sarah, Brenda, Bo, Holly, John, Jane, Kevin, Kim, Leo"},
+    {"Shift":"Thu_AM","Day":"Thu","Shift Type":"AM","# Staff":6,"Workers":"Sandra (Manager), Steve (Lead Server), Brenda (Server), Bailey (Server), Holly (Server), John (Host)","Available (Not Scheduled)":"Maggie, Morgan, Sarah, Brian, Billy, Bo, Hector, Jane, Kevin, Kim, Leo, Lily"},
+    {"Shift":"Thu_PM","Day":"Thu","Shift Type":"PM","# Staff":6,"Workers":"Maggie (Manager), Brian (Lead Server), Billy (Server), Bo (Server), Hector (Server), Jane (Host)","Available (Not Scheduled)":"Morgan, Sandra, Steve, Sarah, Brenda, Bailey, Holly, John, Kevin, Kim, Leo, Lily"},
+    {"Shift":"Fri_AM","Day":"Fri","Shift Type":"AM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Brenda (Server), Bo (Server), Holly (Server), Kevin (Host)","Available (Not Scheduled)":"Maggie, Sandra, Steve, Brian, Billy, Bailey, Hector, John, Jane, Kim, Leo, Lily"},
+    {"Shift":"Fri_PM","Day":"Fri","Shift Type":"PM","# Staff":6,"Workers":"Sandra (Manager), Brian (Lead Server), Billy (Server), Bailey (Server), Hector (Server), Kim (Host)","Available (Not Scheduled)":"Maggie, Morgan, Steve, Sarah, Brenda, Bo, Holly, John, Jane, Kevin, Leo, Lily"},
+    {"Shift":"Sat_AM","Day":"Sat","Shift Type":"AM","# Staff":6,"Workers":"Maggie (Manager), Steve (Lead Server), Brenda (Server), Bailey (Server), Hector (Server), Leo (Host)","Available (Not Scheduled)":"Morgan, Sandra, Sarah, Brian, Billy, Bo, Holly, John, Jane, Kevin, Kim, Lily"},
+    {"Shift":"Sat_PM","Day":"Sat","Shift Type":"PM","# Staff":6,"Workers":"Morgan (Manager), Sarah (Lead Server), Billy (Server), Bo (Server), Holly (Server), Lily (Host)","Available (Not Scheduled)":"Maggie, Sandra, Steve, Brian, Brenda, Bailey, Hector, John, Jane, Kevin, Kim, Leo"},
 ]
 
 _ROLES = {
@@ -54,7 +53,16 @@ _ROLES = {
 }
 
 def _build_default_summary():
+    """Build summary with real preference scores from DEFAULT_EMP_DATA."""
     from collections import defaultdict
+
+    # Build lookup: name -> {sid_Pref: score}
+    pref_lookup = {}
+    for emp in DEFAULT_EMP_DATA:
+        name = emp["name"]
+        pref_lookup[name] = {k.replace("pref_","") + "_Pref": int(v)
+                             for k, v in emp.items() if k.startswith("pref_")}
+
     shifts_by_emp = defaultdict(list)
     for row in _DEFAULT_SCHED_ROWS:
         sid = row["Shift"]
@@ -62,31 +70,58 @@ def _build_default_summary():
         for w in row["Workers"].split(", "):
             name = w[:w.rfind(" (")].strip()
             shifts_by_emp[name].append((sid, st))
+
     rows = []
+    total_pref = 0
+    total_max_pref = 0
+    all_hours = []
+
     for name, assigned in shifts_by_emp.items():
-        n    = len(assigned)
+        n         = len(assigned)
+        hours     = n * 6
+        prefs     = pref_lookup.get(name, {})
+
+        # Actual pref score for assigned shifts
+        pref_score = sum(prefs.get(f"{sid}_Pref", 3) for sid, _ in assigned)
+
+        # Max possible: top-n preferences from all shifts
+        all_pref_vals = sorted(prefs.values(), reverse=True)
+        max_pref = sum(all_pref_vals[:n]) if n <= len(all_pref_vals) else sum(all_pref_vals)
+
+        pref_pct = f"{round(100 * pref_score / max_pref)}%" if max_pref else "N/A"
+
+        total_pref     += pref_score
+        total_max_pref += max_pref
+        all_hours.append(hours)
+
         rows.append({
             "Name":            name,
             "Role":            _ROLES.get(name, ""),
             "Shifts":          n,
-            "Hours":           n * 6,
-            "AM Shifts":       sum(1 for _,st in assigned if st=="AM"),
-            "PM Shifts":       sum(1 for _,st in assigned if st=="PM"),
-            "Pref %":          "N/A",
-            "Assigned Shifts": ", ".join(sid for sid,_ in assigned),
+            "Hours":           hours,
+            "AM Shifts":       sum(1 for _, st in assigned if st == "AM"),
+            "PM Shifts":       sum(1 for _, st in assigned if st == "PM"),
+            "Pref_Score":      pref_score,
+            "Max_Pref_Score":  max_pref,
+            "Pref %":          pref_pct,
+            "Assigned Shifts": ", ".join(sid for sid, _ in assigned),
         })
-    return pd.DataFrame(rows)
+
+    return pd.DataFrame(rows), total_pref, total_max_pref, all_hours
+
 
 DEFAULT_SCHED_DF = pd.DataFrame(_DEFAULT_SCHED_ROWS)
-DEFAULT_SUMM_DF  = _build_default_summary()
+_default_summ, _total_pref, _total_max_pref, _all_hours = _build_default_summary()
+DEFAULT_SUMM_DF = _default_summ
+_overall_pref_pct = round(100 * _total_pref / _total_max_pref, 1) if _total_max_pref else 0
 DEFAULT_METRICS  = {
     "Shifts Scheduled":         12,
     "Total Staff Slots":        72,
-    "Avg Hours / Employee":     24.0,
-    "Max Hours (any emp)":      36,
-    "Min Hours (any emp)":      12,
-    "Hours Std Dev (Fairness)": "—",
-    "Pref Satisfaction":        "N/A (example)",
+    "Avg Hours / Employee":     round(sum(_all_hours) / len(_all_hours), 1),
+    "Max Hours (any emp)":      max(_all_hours),
+    "Min Hours (any emp)":      min(_all_hours),
+    "Hours Std Dev (Fairness)": round(pd.Series(_all_hours).std(), 1),
+    "Pref Satisfaction":        f"{_overall_pref_pct}%",
     "Staffing Coverage":        "100%",
 }
 
@@ -94,6 +129,45 @@ DEFAULT_METRICS  = {
 # ─────────────────────────────────────────────
 #  DATA HELPERS
 # ─────────────────────────────────────────────
+
+def parse_shift_hours(am_start, am_end, pm_start, pm_end):
+    """
+    Parse shift time strings and return hours per shift type.
+    Falls back to 6 hours if parsing fails.
+    Returns: {"AM": float, "PM": float}
+    """
+    import re as _re
+
+    def _parse(t):
+        try:
+            t = t.strip().upper()
+            pat = _re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?")
+            m = pat.match(t)
+            if not m:
+                return None
+            h = int(m.group(1))
+            mins = int(m.group(2) or 0)
+            period = m.group(3)
+            if period == "PM" and h != 12:
+                h += 12
+            elif period == "AM" and h == 12:
+                h = 0
+            return h + mins / 60
+        except Exception:
+            return None
+
+    def _hrs(start_str, end_str, default=6):
+        s, e = _parse(start_str), _parse(end_str)
+        if s is None or e is None:
+            return default
+        diff = (e - s) % 24
+        return diff if diff > 0 else default
+
+    return {
+        "AM": _hrs(am_start, am_end),
+        "PM": _hrs(pm_start, pm_end),
+    }
+
 
 def clean_emp(df):
     df = df.copy()
@@ -407,9 +481,22 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         ]
 
     updated = current_sched_df.copy()
+    selected_names = set(selected)
     updated.loc[updated["Shift"] == affected_shift_id, "Workers"] = \
         ", ".join(f"{e} ({roles.get(e,'')})" for e in selected)
     updated.loc[updated["Shift"] == affected_shift_id, "# Staff"] = len(selected)
+    # Refresh the Available (Not Scheduled) column for the affected shift
+    if "Available (Not Scheduled)" in updated.columns:
+        avail_col = f"{affected_shift_id}_Avail"
+        if avail_col in emp_df.columns:
+            still_avail = [e for e in employees
+                           if e not in selected_names
+                           and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
+                                                 errors="coerce").fillna(0).values[0]) == 1]
+        else:
+            still_avail = [e for e in employees if e not in selected_names]
+        updated.loc[updated["Shift"] == affected_shift_id, "Available (Not Scheduled)"] = \
+            ", ".join(still_avail)
     return updated, _rebuild_summary(emp_df, shift_df, updated, roles, shift_type), []
 
 
@@ -417,7 +504,11 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
 #  OPTIMIZATION ENGINE
 # ─────────────────────────────────────────────
 
-def build_schedule(emp_df, shift_df, constraints):
+def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=None):
+    if shift_hours is None:
+        shift_hours = {"AM": 6.0, "PM": 6.0}
+    if shift_times is None:
+        shift_times = {"AM": ("8:00 AM", "2:00 PM"), "PM": ("2:00 PM", "8:00 PM")}
     emp_df   = clean_emp(emp_df)
     shift_df = clean_shift(shift_df)
 
@@ -503,8 +594,14 @@ def build_schedule(emp_df, shift_df, constraints):
                         model.Add(x[e, s] == 0)
 
     if constraints.get("max_hours", True):
+        # Use per-shift hours so AM and PM can differ in length
         for e in employees:
-            model.Add(sum(x[e, s] for s in shift_ids) * HOURS_PER_SHIFT <= max_hours[e])
+            # Multiply each shift assignment by that shift's actual hours (scaled ×10 for integer math)
+            weighted_hours = sum(
+                x[e, s] * int(shift_hours.get(shift_type.get(s, "AM"), HOURS_PER_SHIFT) * 10)
+                for s in shift_ids
+            )
+            model.Add(weighted_hours <= int(max_hours[e] * 10))
 
     for d in shift_df["Day"].unique():
         day_shifts = shift_df[shift_df["Day"] == d]["Shift_ID"].tolist()
@@ -615,7 +712,8 @@ def build_schedule(emp_df, shift_df, constraints):
         # Check 3: max hours too low for the schedule
         if constraints.get("max_hours", True):
             total_slots = int(shift_df["Total_Staff"].sum())
-            total_capacity = sum(max_hours[e] // HOURS_PER_SHIFT for e in employees)
+            avg_h = sum(shift_hours.values()) / len(shift_hours) if shift_hours else HOURS_PER_SHIFT
+            total_capacity = sum(int(max_hours[e] / avg_h) for e in employees)
             if total_capacity < total_slots:
                 diag.append(
                     f"❌ Max-hours constraint too tight: employees can cover at most "
@@ -635,6 +733,7 @@ def build_schedule(emp_df, shift_df, constraints):
     for _, row in shift_df.iterrows():
         s = row["Shift_ID"]
         workers = []
+        assigned_names = set()
         for e in employees:
             if solver.Value(x[e, s]) == 1:
                 filled = roles[e]
@@ -643,19 +742,36 @@ def build_schedule(emp_df, shift_df, constraints):
                         filled = r
                         break
                 workers.append(f"{e} ({filled})")
+                assigned_names.add(e)
+        # Available but not scheduled this shift
+        avail_col = f"{s}_Avail"
+        if avail_col in emp_df.columns:
+            not_scheduled = [
+                e for e in employees
+                if e not in assigned_names
+                and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
+                                      errors="coerce").fillna(0).values[0]) == 1
+            ]
+        else:
+            not_scheduled = [e for e in employees if e not in assigned_names]
+        st = row["Shift_Type"]
+        t_start, t_end = shift_times.get(st, ("", ""))
+        time_range = f"{t_start} – {t_end}" if t_start else ""
         sched_rows.append({
-            "Shift":      s,
-            "Day":        row["Day"],
-            "Shift Type": row["Shift_Type"],
-            "# Staff":    len(workers),
-            "Workers":    ", ".join(workers),
+            "Shift":               s,
+            "Day":                 row["Day"],
+            "Shift Type":          st,
+            "Hours":               f"{shift_hours.get(st, HOURS_PER_SHIFT):.1f}h  ({time_range})",
+            "# Staff":             len(workers),
+            "Workers":             ", ".join(workers),
+            "Available (Not Scheduled)": ", ".join(not_scheduled),
         })
 
     summ_rows = []
     for e in employees:
         assigned = [s for s in shift_ids if solver.Value(x[e, s]) == 1]
         n        = len(assigned)
-        hours    = n * HOURS_PER_SHIFT
+        hours    = sum(shift_hours.get(shift_type.get(s, "AM"), HOURS_PER_SHIFT) for s in assigned)
         pref_score = 0
         for s in assigned:
             pc = f"{s}_Pref"
@@ -689,12 +805,20 @@ def build_schedule(emp_df, shift_df, constraints):
 #  AI CHAT HELPER
 # ─────────────────────────────────────────────
 
+# ── Configuration ───────────────────────────────────────────────────────────
+ANTHROPIC_API_KEY = "your-api-key-here"
+# Model options (use whichever your API key has access to):
+#   "claude-haiku-4-5-20251001"   ← fast, cheap
+#   "claude-sonnet-4-6"           ← recommended ✓
+ANTHROPIC_MODEL   = "claude-sonnet-4-6"
+# ───────────────────────────────────────────────────────────────────────────
+
 def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     """Call Claude to answer manager questions about the current schedule."""
     if _anthropic_mod is None:
         return "❌ The anthropic package is not installed. Run: pip install anthropic"
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return "❌ Missing ANTHROPIC_API_KEY environment variable. Add it in Posit → Variables."
+    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "your-api-key-here":
+        return "❌ Add your Anthropic API key to the ANTHROPIC_API_KEY variable at the top of the file."
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
@@ -723,9 +847,9 @@ MANAGER QUESTION:
 {user_question}"""
 
     try:
-        client = _anthropic_mod.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        client = _anthropic_mod.Anthropic(api_key=ANTHROPIC_API_KEY)
         msg = client.messages.create(
-            model="claude-sonnet-4-6",
+            model=ANTHROPIC_MODEL,
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -1024,16 +1148,57 @@ app_ui = ui.page_fluid(
                 ui.tags.b("Host"), " → Host slots only",
                 style="color:#6c757d; line-height:2.0;"
             ),
-            ui.hr(),
-            ui.h5("🤖 AI Assistant"),
-            ui.tags.small("Ask questions about the schedule below.",
-                          style="color:#6c757d;"),
+
             width=290,
         ),
 
         ui.output_ui("status_banner"),
         ui.output_ui("callout_banner"),
         ui.output_ui("metrics_panel"),
+
+        # Collapsible metrics explanation
+        ui.tags.details(
+            ui.tags.summary(
+                "ℹ️ How are these metrics calculated?",
+                style="font-size:13px; color:#0d6efd; cursor:pointer; "
+                      "padding:6px 0; user-select:none;"
+            ),
+            ui.div(
+                ui.tags.table(
+                    ui.tags.thead(
+                        ui.tags.tr(
+                            ui.tags.th("Metric", style="padding:5px 12px 5px 0; font-size:12px; color:#495057; white-space:nowrap;"),
+                            ui.tags.th("How it's computed", style="padding:5px 0; font-size:12px; color:#495057;"),
+                        )
+                    ),
+                    ui.tags.tbody(
+                        ui.tags.tr(
+                            ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                            ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                            ui.tags.td("Standard deviation of hours across all employees. Lower = more equal distribution. 0 means everyone works exactly the same hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Pref Satisfaction", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                            ui.tags.td("Sum of each employee's preference score for their assigned shifts ÷ the maximum they could have gotten (their top-N preferences, where N = number of shifts assigned). Preferences are rated 1–5. 100% means everyone got their most-preferred shifts.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Pref % (per employee)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                            ui.tags.td("Same calculation but for one person: their actual preference score ÷ best possible score for that many shifts. Shown in the Employee Summary table.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                        ),
+                        ui.tags.tr(
+                            ui.tags.td("Staffing Coverage", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                            ui.tags.td("Whether every shift has its required number of staff filled. 100% means no shift is understaffed.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                        ),
+                    ),
+                    style="border-collapse:collapse; width:100%;"
+                ),
+                style="padding:10px 4px 6px; border-top:1px solid #dee2e6; margin-top:2px;"
+            ),
+            style="margin-bottom:12px;"
+        ),
 
         ui.navset_tab(
 
@@ -1061,10 +1226,45 @@ app_ui = ui.page_fluid(
             ui.nav_panel(
                 "📋 Shift Requirements",
                 ui.div(style="height:14px;"),
-                ui.p(
-                    "Set staffing requirements for each shift. ",
-                    ui.tags.b("Total must equal Mgr + Lead + Server + Host."),
-                    style="font-size:13px; color:#6c757d;"
+                ui.p("Set staffing requirements for each shift.",
+                     style="font-size:13px; color:#6c757d;"),
+                ui.hr(),
+                ui.div(
+                    ui.tags.b("Shift Hours:", style="font-size:13px;"),
+                    ui.div(
+                        ui.div(
+                            ui.tags.span("AM shift:", style="font-size:12px; color:#495057; margin-right:6px;"),
+                            ui.input_text("am_start", None, value="8:00 AM",  width="80px"),
+                            ui.tags.span("to", style="font-size:12px; color:#6c757d; margin:0 6px;"),
+                            ui.input_text("am_end",   None, value="2:00 PM",  width="80px"),
+                            style="display:flex; align-items:center; margin-bottom:6px;"
+                        ),
+                        ui.div(
+                            ui.tags.span("PM shift:", style="font-size:12px; color:#495057; margin-right:6px;"),
+                            ui.input_text("pm_start", None, value="2:00 PM",  width="80px"),
+                            ui.tags.span("to", style="font-size:12px; color:#6c757d; margin:0 6px;"),
+                            ui.input_text("pm_end",   None, value="8:00 PM",  width="80px"),
+                            style="display:flex; align-items:center;"
+                        ),
+                        style="margin-top:6px;"
+                    ),
+                    ui.tags.small(
+                        "Hours per shift are used to enforce max weekly hours and shown in the schedule.",
+                        style="color:#6c757d; font-size:11px; display:block; margin-top:4px;"
+                    ),
+                    style="margin-bottom:14px;"
+                ),
+                ui.hr(),
+                ui.div(
+                    ui.tags.b("Open Days:", style="font-size:13px;"),
+                    ui.div(
+                        *[ui.div(
+                            ui.input_checkbox(f"open_{d}", d, value=(d != "Sun")),
+                            style="display:inline-block; margin-right:10px; font-size:13px;"
+                        ) for d in ALL_DAYS],
+                        style="display:flex; flex-wrap:wrap; margin-top:4px;"
+                    ),
+                    style="margin-bottom:12px;"
                 ),
                 ui.hr(),
                 make_shift_form(),
@@ -1121,6 +1321,7 @@ def server(input, output, session):
     change_log     = reactive.value("")
     metrics_store  = reactive.value(DEFAULT_METRICS.copy())
     callout_log    = reactive.value(set())
+    shift_hours    = reactive.value({"AM": 6.0, "PM": 6.0})
     n_emp_rows     = reactive.value(len(DEFAULT_EMP_DATA))
 
     # ── Employee table — entire table from one output_ui ─────────────
@@ -1328,7 +1529,11 @@ def server(input, output, session):
             "no_clopening": input.no_clopening(),
             "fairness":     input.fairness(),
         }
-        sched, summ, errs = build_schedule(emp_df, shift_df, constraints)
+        sh = shift_hours.get()
+        st_times = {"AM": (input.am_start(), input.am_end()),
+                    "PM": (input.pm_start(), input.pm_end())}
+        sched, summ, errs = build_schedule(emp_df, shift_df, constraints,
+                                           shift_hours=sh, shift_times=st_times)
         sched_store.set(sched)
         summ_store.set(summ)
         error_msgs.set(errs)
@@ -1344,6 +1549,12 @@ def server(input, output, session):
     def get_open_days():
         return [d for d in ALL_DAYS if input[f"open_{d}"]()]
 
+    def get_shift_hours():
+        return parse_shift_hours(
+            input.am_start(), input.am_end(),
+            input.pm_start(), input.pm_end()
+        )
+
     @reactive.effect
     @reactive.event(input.run)
     def handle_run():
@@ -1356,6 +1567,7 @@ def server(input, output, session):
             error_msgs.set(["Add at least one employee name in the Employees tab."])
             return
         shift = build_shift_df_from_inputs(input, open_days)
+        shift_hours.set(get_shift_hours())
         emp_reactive.set(emp)
         shift_reactive.set(shift)
         change_log.set("")
@@ -1434,7 +1646,9 @@ def server(input, output, session):
             )
         return ui.HTML(
             '<div class="alert-box alert-info">'
-            '📋 Example schedule shown below. Fill in the tabs and click Generate Schedule to create your own.</div>'
+            '📋 <strong>Example schedule loaded.</strong> Preferences, metrics, and availability '
+            'are computed from the sample dataset. Fill in the Employees &amp; Shift Requirements '
+            'tabs and click Generate Schedule to create your own.</div>'
         )
 
     @output
