@@ -1222,134 +1222,160 @@ app_ui = ui.page_fluid(
             width=290,
         ),
 
-        ui.output_ui("status_banner"),
-        ui.output_ui("callout_banner"),
-        ui.output_ui("metrics_panel"),
-
-        # Collapsible metrics explanation
-        ui.tags.details(
-            ui.tags.summary(
-                "ℹ️ How are these metrics calculated?",
-                style="font-size:13px; color:#0d6efd; cursor:pointer; "
-                      "padding:6px 0; user-select:none;"
-            ),
-            ui.div(
-                ui.tags.table(
-                    ui.tags.thead(
-                        ui.tags.tr(
-                            ui.tags.th("Metric", style="padding:5px 12px 5px 0; font-size:12px; color:#495057; white-space:nowrap;"),
-                            ui.tags.th("How it's computed", style="padding:5px 0; font-size:12px; color:#495057;"),
-                        )
-                    ),
-                    ui.tags.tbody(
-                        ui.tags.tr(
-                            ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
-                        ),
-                        ui.tags.tr(
-                            ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Standard deviation of hours across all employees. Lower = more equal distribution. 0 means everyone works exactly the same hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
-                        ),
-                        ui.tags.tr(
-                            ui.tags.td("Pref Satisfaction", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Sum of each employee's preference score for their assigned shifts ÷ the maximum they could have gotten (their top-N preferences, where N = number of shifts assigned). Preferences are rated 1–5. 100% means everyone got their most-preferred shifts.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
-                        ),
-                        ui.tags.tr(
-                            ui.tags.td("Pref % (per employee)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Same calculation but for one person: their actual preference score ÷ best possible score for that many shifts. Shown in the Employee Summary table.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
-                        ),
-                        ui.tags.tr(
-                            ui.tags.td("Staffing Coverage", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Whether every shift has its required number of staff filled. 100% means no shift is understaffed.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
-                        ),
-                    ),
-                    style="border-collapse:collapse; width:100%;"
-                ),
-                style="padding:10px 4px 6px; border-top:1px solid #dee2e6; margin-top:2px;"
-            ),
-            style="margin-bottom:12px;"
-        ),
-
+        # ── Two top-level tabs: Setup and Results ───────────────────────
         ui.navset_tab(
 
-            # TAB 1 — Employee template
+            # ══ TAB A: SETUP ═══════════════════════════════════════════
             ui.nav_panel(
-                "👥 Employees",
-                ui.div(style="height:14px;"),
-                ui.div(
-                    ui.input_numeric("n_employees", "Number of employees",
-                                     value=6, min=1, max=MAX_EMPLOYEES, width="110px"),
-                    ui.div(
-                        ui.input_action_button("apply_n_emp", "Apply",
-                                               class_="btn-outline-secondary btn-sm"),
-                        style="margin-top:22px; margin-left:10px;"
+                "⚙️ Setup",
+                ui.div(style="height:10px;"),
+                ui.output_ui("status_banner"),
+
+                ui.navset_tab(
+                    # Employee sub-tab
+                    ui.nav_panel(
+                        "👥 Employees",
+                        ui.div(style="height:12px;"),
+                        ui.div(
+                            ui.input_numeric("n_employees", "Number of employees",
+                                             value=6, min=1, max=MAX_EMPLOYEES, width="110px"),
+                            ui.div(
+                                ui.input_action_button("apply_n_emp", "Apply",
+                                                       class_="btn-outline-secondary btn-sm"),
+                                style="margin-top:22px; margin-left:10px;"
+                            ),
+                            style="display:flex; align-items:flex-start;"
+                        ),
+                        ui.p("✔ = Available  |  ★ = Preference (1 low → 5 high)",
+                             style="font-size:11px; color:#6c757d; margin:8px 0 4px;"),
+                        ui.hr(),
+                        ui.output_ui("employee_table"),
                     ),
-                    style="display:flex; align-items:flex-start;"
+
+                    # Shift requirements sub-tab
+                    ui.nav_panel(
+                        "📋 Shift Requirements",
+                        ui.div(style="height:12px;"),
+                        ui.p("Set staffing requirements for each shift.",
+                             style="font-size:13px; color:#6c757d;"),
+                        ui.hr(),
+                        ui.div(
+                            ui.tags.b("Open Days:", style="font-size:13px;"),
+                            ui.div(
+                                *[ui.div(
+                                    ui.input_checkbox(f"open_{d}", d, value=(d != "Sun")),
+                                    style="display:inline-block; margin-right:10px; font-size:13px;"
+                                ) for d in ALL_DAYS],
+                                style="display:flex; flex-wrap:wrap; margin-top:4px;"
+                            ),
+                            style="margin-bottom:12px;"
+                        ),
+                        ui.hr(),
+                        make_shift_form(),
+                    ),
+
+                    id="setup_tabs",
                 ),
-                ui.p("✔ = Available  |  ★ = Preference (1 low → 5 high)",
-                     style="font-size:11px; color:#6c757d; margin:8px 0 4px;"),
-                ui.hr(),
-                ui.output_ui("employee_table"),
             ),
 
-            # TAB 2 — Shift requirements
+            # ══ TAB B: SCHEDULE & RESULTS ══════════════════════════════
             ui.nav_panel(
-                "📋 Shift Requirements",
-                ui.div(style="height:14px;"),
-                ui.p("Set staffing requirements for each shift.",
-                     style="font-size:13px; color:#6c757d;"),
-                ui.hr(),
-                ui.div(
-                    ui.tags.b("Open Days:", style="font-size:13px;"),
-                    ui.div(
-                        *[ui.div(
-                            ui.input_checkbox(f"open_{d}", d, value=(d != "Sun")),
-                            style="display:inline-block; margin-right:10px; font-size:13px;"
-                        ) for d in ALL_DAYS],
-                        style="display:flex; flex-wrap:wrap; margin-top:4px;"
+                "📅 Schedule & Results",
+                ui.div(style="height:10px;"),
+
+                ui.output_ui("status_banner2"),
+                ui.output_ui("callout_banner"),
+                ui.output_ui("metrics_panel"),
+
+                ui.tags.details(
+                    ui.tags.summary(
+                        "ℹ️ How are these metrics calculated?",
+                        style="font-size:13px; color:#0d6efd; cursor:pointer; "
+                              "padding:6px 0; user-select:none;"
                     ),
-                    style="margin-bottom:12px;"
+                    ui.div(
+                        ui.tags.table(
+                            ui.tags.thead(
+                                ui.tags.tr(
+                                    ui.tags.th("Metric", style="padding:5px 12px 5px 0; font-size:12px; color:#495057; white-space:nowrap;"),
+                                    ui.tags.th("How it's computed", style="padding:5px 0; font-size:12px; color:#495057;"),
+                                )
+                            ),
+                            ui.tags.tbody(
+                                ui.tags.tr(
+                                    ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                                    ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                                    ui.tags.td("Standard deviation of hours across all employees. Lower = more equal distribution.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td("Pref Satisfaction", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                                    ui.tags.td("Actual pref scores ÷ best possible scores across all employees. 100% = everyone got top picks.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td("Pref % (per employee)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                                    ui.tags.td("Per-person version — shown in the Employee Summary table.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                ),
+                                ui.tags.tr(
+                                    ui.tags.td("Staffing Coverage", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
+                                    ui.tags.td("100% = every shift fully staffed.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                ),
+                            ),
+                            style="border-collapse:collapse; width:100%;"
+                        ),
+                        style="padding:10px 4px 6px; border-top:1px solid #dee2e6; margin-top:2px;"
+                    ),
+                    style="margin-bottom:14px;"
                 ),
-                ui.hr(),
-                make_shift_form(),
+
+                ui.navset_tab(
+                    ui.nav_panel(
+                        "📋 Weekly Schedule",
+                        ui.div(style="height:8px;"),
+                        ui.tags.small(
+                            "* = employee covering a role below their own rank "
+                            "(e.g. a Manager filling a Server slot).",
+                            style="color:#6c757d; font-size:12px; display:block; margin-bottom:6px;"
+                        ),
+                        ui.output_data_frame("schedule"),
+                    ),
+                    ui.nav_panel(
+                        "👥 Employee Summary",
+                        ui.div(style="height:8px;"),
+                        ui.output_data_frame("summary"),
+                    ),
+                    ui.nav_panel(
+                        "🤖 AI Assistant",
+                        ui.div(style="height:8px;"),
+                        ui.p("Ask questions about the schedule — who is working, fairness, replacements, and more.",
+                             style="color:#6c757d; font-size:13px; margin-bottom:10px;"),
+                        ui.div(
+                            ui.output_ui("chat_history"),
+                            style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; "
+                                  "padding:12px; min-height:100px; max-height:420px; overflow-y:auto; "
+                                  "margin-bottom:10px; font-size:14px;"
+                        ),
+                        ui.div(
+                            ui.div(
+                                ui.input_text("chat_input", None,
+                                              placeholder="e.g. Who is working Monday AM?  Who has the fewest shifts?",
+                                              width="100%"),
+                                style="flex:1;"
+                            ),
+                            ui.div(
+                                ui.input_action_button("chat_send", "Ask", class_="btn-primary"),
+                                style="margin-left:8px;"
+                            ),
+                            style="display:flex; align-items:flex-start;"
+                        ),
+                    ),
+                    id="results_tabs",
+                ),
             ),
 
-            id="input_tabs",
-        ),
-
-        ui.div("📅 Weekly Schedule",  class_="section-title"),
-        ui.tags.small(
-            "* = employee is covering a role below their own rank "  
-            "(e.g. a Manager filling a Server slot).",
-            style="color:#6c757d; font-size:12px; display:block; margin-bottom:6px;"
-        ),
-        ui.output_data_frame("schedule"),
-
-        ui.div("👥 Employee Summary", class_="section-title"),
-        ui.output_data_frame("summary"),
-
-        ui.div("🤖 AI Schedule Assistant", class_="section-title"),
-        ui.p("Ask questions about the schedule — who is working, fairness, replacements, and more.",
-             style="color:#6c757d; font-size:13px; margin-bottom:10px;"),
-        ui.div(
-            ui.output_ui("chat_history"),
-            style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; "
-                  "padding:12px; min-height:80px; max-height:360px; overflow-y:auto; "
-                  "margin-bottom:10px; font-size:14px;"
-        ),
-        ui.div(
-            ui.div(
-                ui.input_text("chat_input", None,
-                              placeholder="e.g. Who is working Monday AM?  Who has the fewest shifts?",
-                              width="100%"),
-                style="flex:1;"
-            ),
-            ui.div(
-                ui.input_action_button("chat_send", "Ask",
-                                       class_="btn-primary"),
-                style="margin-left:8px;"
-            ),
-            style="display:flex; align-items:flex-start; gap:0;"
+            id="main_tabs",
         ),
     )
 )
@@ -1632,6 +1658,8 @@ def server(input, output, session):
         change_log.set("")
         callout_log.set(set())
         run_optimization(emp, shift)
+        # Auto-navigate to results tab so manager sees the schedule immediately
+        ui.update_navs("main_tabs", selected="📅 Schedule & Results")
 
     # ── Call-out ─────────────────────────────────────────────────────
     @reactive.effect
@@ -1704,6 +1732,25 @@ def server(input, output, session):
     # ── Outputs ──────────────────────────────────────────────────────
     @output
     @render.ui
+    def status_banner2():
+        """Mirrors status_banner for the Results tab."""
+        errs = error_msgs.get()
+        if errs:
+            body = "".join(f"<div>❌ {e}</div>" for e in errs)
+            return ui.HTML(f'<div class="alert-box alert-danger">{body}</div>')
+        if not sched_store.get().empty:
+            n = len(sched_store.get())
+            return ui.HTML(
+                f'<div class="alert-box alert-success">'
+                f'✅ Schedule generated — {n} shifts fully staffed.</div>'
+            )
+        return ui.HTML(
+            '<div class="alert-box alert-info">'
+            '⬆️ Go to Setup tab, fill in your data, then click Generate Schedule.</div>'
+        )
+
+    @output
+    @render.ui
     def status_banner():
         errs = error_msgs.get()
         if errs:
@@ -1717,9 +1764,9 @@ def server(input, output, session):
             )
         return ui.HTML(
             '<div class="alert-box alert-info">'
-            '📋 <strong>Example schedule loaded.</strong> Preferences, metrics, and availability '
-            'are computed from the sample dataset. Fill in the Employees &amp; Shift Requirements '
-            'tabs and click Generate Schedule to create your own.</div>'
+            '📋 <strong>Example schedule loaded.</strong> This is a hand-built rotation — not optimizer-generated. '
+            'Preference satisfaction will be lower than an optimized schedule. '
+            'Click <strong>Generate Schedule</strong> to run the optimizer on the sample data and see the real result.</div>'
         )
 
     @output
