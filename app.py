@@ -533,9 +533,62 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
             if covered < needed:
                 unmet.append(f"{needed}×{emp_role} (only {covered})")
     if unmet:
-        return pd.DataFrame(), pd.DataFrame(), [
-            f"❌ Cannot fill role requirements for {affected_shift_id}: " + ", ".join(unmet)
-        ]
+        # Can't satisfy role requirements — find overtime options for the missing roles
+        missing_roles = set()
+        for col, emp_role in role_map.items():
+            if col in shift_row and int(shift_row[col]) > 0:
+                needed  = int(shift_row[col])
+                covered = sum(1 for e in selected
+                              if emp_role in ROLE_HIERARCHY.get(roles.get(e,""), []))
+                if covered < needed:
+                    missing_roles.add(emp_role)
+
+        overtime_options = []
+        for e in employees:
+            if e == absent_emp or e in set(selected):
+                continue
+            if (e, affected_shift_id) in (blocked_pairs or set()):
+                continue
+            if e in busy_same_day:
+                continue
+            # Only suggest if they can fill a missing role
+            if not any(r in ROLE_HIERARCHY.get(roles.get(e,""), []) for r in missing_roles):
+                continue
+            reasons = []
+            if e in clopening_blocked:
+                reasons.append("clopening (PM→next AM)")
+            if constraints.get("availability", True) and avail_col in emp_df.columns:
+                val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
+                                    errors="coerce").fillna(0).values[0]
+                if int(val) == 0:
+                    reasons.append("marked unavailable")
+            if constraints.get("max_hours", True):
+                if hours_elsewhere[e] + HOURS_PER_SHIFT > max_hours[e]:
+                    overage = (hours_elsewhere[e] + HOURS_PER_SHIFT) - max_hours[e]
+                    reasons.append(f"overtime (+{overage:.0f}h over cap)")
+            if reasons:
+                overtime_options.append((e, roles.get(e,""), reasons))
+
+        missing_str = ", ".join(missing_roles)
+        if overtime_options:
+            lines = [
+                f"❌ Cannot fill {missing_str} slot(s) for {affected_shift_id} under current constraints.",
+                f"",
+                f"🚨 EMERGENCY OVERTIME — employees who could cover the {missing_str} slot(s):",
+                f"",
+            ]
+            for e, role, reasons in overtime_options:
+                lines.append(f"  • {e} ({role}) — would require: {', '.join(reasons)}")
+            lines += [
+                f"",
+                f"To assign one: uncheck the relevant constraint(s) in the sidebar and click Mark Absent & Re-Optimize.",
+            ]
+            return pd.DataFrame(), pd.DataFrame(), lines
+        else:
+            return pd.DataFrame(), pd.DataFrame(), [
+                f"❌ Cannot fill role requirements for {affected_shift_id}: " + ", ".join(unmet) +
+                f". No overtime-eligible employees available for the missing {missing_str} slot(s)."
+            ]
 
     updated = current_sched_df.copy()
     selected_names = set(selected)
