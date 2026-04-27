@@ -1198,10 +1198,20 @@ app_ui = ui.page_fluid(
             ui.hr(),
             ui.input_action_button("run", "▶  Generate Schedule",
                                    class_="btn-primary w-100"),
+            ui.input_action_button("reset_defaults", "↺  Reset to Defaults",
+                                   class_="btn-outline-secondary btn-sm w-100",
+                                   style="margin-top:6px;"),
+            ui.hr(),
+            ui.h5("📥 Export"),
+            ui.download_button("dl_schedule", "Download Schedule (CSV)",
+                               class_="btn-outline-primary btn-sm w-100"),
+            ui.download_button("dl_summary",  "Download Summary (CSV)",
+                               class_="btn-outline-primary btn-sm w-100",
+                               style="margin-top:6px;"),
             ui.hr(),
             ui.h5("🚨 Call-Out Simulation"),
-            ui.input_select("emp_sel",   "Employee Calling Out", choices=[]),
-            ui.input_select("shift_sel", "Their Affected Shift", choices=[]),
+            ui.input_select("shift_sel", "Affected Shift", choices=[]),
+            ui.output_ui("emp_sel_ui"),
             ui.input_action_button("callout", "Mark Absent & Re-Optimize",
                                    class_="btn-danger w-100"),
             ui.hr(),
@@ -1291,6 +1301,7 @@ app_ui = ui.page_fluid(
 
                 ui.output_ui("status_banner2"),
                 ui.output_ui("callout_banner"),
+                ui.output_ui("callout_history_panel"),
                 ui.output_ui("metrics_panel"),
 
                 ui.tags.details(
@@ -1376,8 +1387,10 @@ app_ui = ui.page_fluid(
                         style="flex:1;"
                     ),
                     ui.div(
-                        ui.input_action_button("chat_send", "Ask", class_="btn-primary"),
-                        style="margin-left:8px;"
+                        ui.input_action_button("chat_send",  "Ask",   class_="btn-primary"),
+                        ui.input_action_button("chat_clear", "Clear", class_="btn-outline-secondary",
+                                               style="margin-left:6px;"),
+                        style="margin-left:8px; display:flex;"
                     ),
                     style="display:flex; align-items:flex-start;"
                 ),
@@ -1400,6 +1413,21 @@ def server(input, output, session):
     def _init_tab():
         ui.update_navs("main_tabs", selected="📅 Schedule & Results")
 
+    @reactive.effect
+    @reactive.event(input.reset_defaults)
+    def handle_reset():
+        sched_store.set(DEFAULT_SCHED_DF.copy())
+        summ_store.set(DEFAULT_SUMM_DF.copy())
+        metrics_store.set(DEFAULT_METRICS.copy())
+        emp_reactive.set(None)
+        shift_reactive.set(None)
+        error_msgs.set([])
+        change_log.set("")
+        callout_log.set(set())
+        callout_history.set([])
+        is_default.set(True)
+        n_emp_rows.set(len(DEFAULT_EMP_DATA))
+
     # Pre-populate with example schedule so the app looks live on first load
     sched_store    = reactive.value(DEFAULT_SCHED_DF.copy())
     summ_store     = reactive.value(DEFAULT_SUMM_DF.copy())
@@ -1411,7 +1439,9 @@ def server(input, output, session):
     callout_log    = reactive.value(set())
     shift_hours    = reactive.value({"AM": 6.0, "PM": 6.0})
     n_emp_rows     = reactive.value(len(DEFAULT_EMP_DATA))
-    is_default     = reactive.value(True)   # True = showing example, not user-generated
+    is_default        = reactive.value(True)
+    callout_history   = reactive.value([])   # list of callout change strings
+    chat_messages_val = reactive.value([])   # renamed to avoid collision
 
     # ── Employee table — entire table from one output_ui ─────────────
     @output
@@ -1628,8 +1658,9 @@ def server(input, output, session):
         )
         ec = clean_emp(emp_df)
         sc = clean_shift(shift_df)
-        if "Name"     in ec.columns: ui.update_select("emp_sel",   choices=ec["Name"].tolist())
-        if "Shift_ID" in sc.columns: ui.update_select("shift_sel", choices=sc["Shift_ID"].tolist())
+        if "Shift_ID" in sc.columns:
+            ui.update_select("shift_sel", choices=sc["Shift_ID"].tolist())
+        # emp_sel is now dynamic (output_ui) — updated reactively via emp_sel_ui
 
     # ── Generate schedule ────────────────────────────────────────────
     def get_open_days():
@@ -1708,6 +1739,10 @@ def server(input, output, session):
             return
 
         callout_log.set(callout_log.get() | {(absent_emp, affected_shift)})
+        # Append to callout history log
+        hist = callout_history.get()
+        hist = hist + [{"shift": affected_shift, "absent": absent_emp, "log": log}]
+        callout_history.set(hist)
 
         def _all_workers_from_row(df, shift_id):
             row = df[df["Shift"] == shift_id]
@@ -1745,6 +1780,31 @@ def server(input, output, session):
         )
 
     # ── Outputs ──────────────────────────────────────────────────────
+    # ── Smart callout: emp_sel shows only workers on selected shift ─────────
+    @output
+    @render.ui
+    def emp_sel_ui():
+        curr = sched_store.get()
+        selected_shift = input.shift_sel() if hasattr(input, "shift_sel") else ""
+        if curr.empty or not selected_shift:
+            return ui.input_select("emp_sel", "Employee Calling Out", choices=[])
+        row = curr[curr["Shift"] == selected_shift]
+        if row.empty:
+            return ui.input_select("emp_sel", "Employee Calling Out", choices=[])
+        # Collect names from role columns
+        names = []
+        for col in ["Manager(s)", "Lead Server(s)", "Server(s)", "Host(s)"]:
+            val = row.iloc[0].get(col, "")
+            if val and str(val) != "—":
+                for n in str(val).split(","):
+                    n = n.strip().rstrip("*").strip()
+                    if n and n not in names:
+                        names.append(n)
+        blocked = {e for e, s in callout_log.get() if s == selected_shift}
+        choices = [n for n in names if n not in blocked]
+        return ui.input_select("emp_sel", "Employee Calling Out",
+                               choices=choices if choices else ["(none available)"])
+
     @output
     @render.ui
     def status_banner2():
@@ -1800,6 +1860,27 @@ def server(input, output, session):
 
     @output
     @render.ui
+    def callout_history_panel():
+        hist = callout_history.get()
+        if not hist:
+            return ui.HTML("")
+        items = "".join(
+            f'<div style="padding:4px 8px; margin-bottom:3px; background:#fff; '
+            f'border-radius:4px; border:1px solid #dee2e6; font-size:12px;">'
+            f'<span style="font-weight:600; color:#495057;">{h["shift"]}</span> — '
+            f'<span style="color:#842029;">{h["absent"]}</span> marked absent'
+            f'</div>'
+            for h in hist
+        )
+        return ui.HTML(
+            f'<div style="margin-bottom:12px;">'
+            f'<div style="font-size:12px; font-weight:600; color:#6c757d; margin-bottom:4px;">'
+            f'📋 Callout History ({len(hist)} this session):</div>'
+            f'{items}</div>'
+        )
+
+    @output
+    @render.ui
     def metrics_panel():
         m = metrics_store.get()
         if not m:
@@ -1837,6 +1918,11 @@ def server(input, output, session):
     # ── AI Chat ──────────────────────────────────────────────────────
 
     chat_messages = reactive.value([])   # list of {"role": "user"|"assistant", "text": str}
+
+    @reactive.effect
+    @reactive.event(input.chat_clear)
+    def handle_chat_clear():
+        chat_messages.set([])
 
     @reactive.effect
     @reactive.event(input.chat_send)
@@ -1885,6 +1971,33 @@ def server(input, output, session):
                     f'<span style="white-space:pre-wrap;">{m["text"]}</span></div>'
                 )
         return ui.HTML("".join(parts))
+
+
+    # ── CSV Downloads ────────────────────────────────────────────────────────
+    @render.download(filename="schedule.csv")
+    def dl_schedule():
+        import io
+        df = sched_store.get()
+        if df.empty:
+            empty_msg = "No schedule generated yet."
+            yield empty_msg
+            return
+        buf = io.StringIO()
+        df.to_csv(buf, index=False)
+        yield buf.getvalue()
+
+    @render.download(filename="employee_summary.csv")
+    def dl_summary():
+        import io
+        df = summ_store.get()
+        if df.empty:
+            empty_msg = "No schedule generated yet."
+            yield empty_msg
+            return
+        cols = [c for c in df.columns if c not in ("Pref_Score","Max_Pref_Score")]
+        buf = io.StringIO()
+        df[cols].to_csv(buf, index=False)
+        yield buf.getvalue()
 
 
 app = App(app_ui, server)
