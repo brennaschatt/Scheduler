@@ -866,6 +866,10 @@ def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
     if not api_key or api_key == "your-api-key-here":
         return "❌ ANTHROPIC_API_KEY not found. Set it in Posit Cloud: App Settings → Variables, then Republish."
+    # Temporary debug — remove after fixing
+    key_preview = f"{api_key[:12]}...{api_key[-4:]}" if len(api_key) > 16 else f"[{len(api_key)} chars]"
+    if not api_key.startswith("sk-ant-"):
+        return f"❌ Key format looks wrong. Got: {key_preview}. Anthropic keys start with sk-ant-"
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
