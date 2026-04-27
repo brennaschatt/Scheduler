@@ -459,10 +459,10 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 continue
             if (e, affected_shift_id) in blocked_pairs:
                 continue
-            if e in busy_same_day:
-                continue  # same-day double shift is always a hard no
             reasons = []
-            # Check what rule(s) would be violated
+            # Note double-shift but don't skip — in an emergency this may be necessary
+            if e in busy_same_day:
+                reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
             if constraints.get("availability", True) and avail_col in emp_df.columns:
@@ -488,14 +488,13 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 lines.append(f"  • {e} ({role}) — would require: {', '.join(reasons)}")
             lines += [
                 f"",
-                f"To assign one: uncheck the relevant constraint(s) in the sidebar and click Mark Absent & Re-Optimize.",
+                f"Contact one of the above directly to arrange emergency coverage.",
             ]
             return pd.DataFrame(), pd.DataFrame(), lines
         else:
             return pd.DataFrame(), pd.DataFrame(), [
                 f"❌ No replacement found for {absent_emp} on {affected_shift_id}. "
-                f"No employees are available even with overtime/clopening exceptions "
-                f"(all may be working the same day or previously called out)."
+                f"All employees are either working that day, previously called out, or unavailable."
             ]
 
     role_needs = {}
@@ -549,12 +548,12 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 continue
             if (e, affected_shift_id) in (blocked_pairs or set()):
                 continue
-            if e in busy_same_day:
-                continue
             # Only suggest if they can fill a missing role
             if not any(r in ROLE_HIERARCHY.get(roles.get(e,""), []) for r in missing_roles):
                 continue
             reasons = []
+            if e in busy_same_day:
+                reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
             if constraints.get("availability", True) and avail_col in emp_df.columns:
@@ -581,13 +580,13 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 lines.append(f"  • {e} ({role}) — would require: {', '.join(reasons)}")
             lines += [
                 f"",
-                f"To assign one: uncheck the relevant constraint(s) in the sidebar and click Mark Absent & Re-Optimize.",
+                f"Contact one of the above directly to arrange emergency coverage.",
             ]
             return pd.DataFrame(), pd.DataFrame(), lines
         else:
             return pd.DataFrame(), pd.DataFrame(), [
-                f"❌ Cannot fill role requirements for {affected_shift_id}: " + ", ".join(unmet) +
-                f". No overtime-eligible employees available for the missing {missing_str} slot(s)."
+                f"❌ Cannot fill {missing_str} slot(s) for {affected_shift_id}. "
+                f"No employees available even for emergency coverage — all may be working that day or previously called out."
             ]
 
     updated = current_sched_df.copy()
@@ -958,27 +957,59 @@ ANTHROPIC_API_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL   = "claude-sonnet-4-6"
 # ───────────────────────────────────────────────────────────────────────────
 
-def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
-    """Call Claude to answer manager questions about the current schedule."""
+def ask_schedule_ai(user_question, sched_df, summ_df, metrics,
+                    change_log_text, conversation_history=None,
+                    active_constraints=None, callout_history_list=None):
+    """
+    Call Claude to answer manager questions about the current schedule.
+    Supports multi-turn conversation via conversation_history.
+    """
     if _anthropic_mod is None:
         return "❌ The anthropic package is not installed. Run: pip install anthropic"
-    # Read key fresh every call — Posit Cloud may inject it after module load
     import os as _os2
     api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
     if not api_key or api_key == "your-api-key-here":
         return "❌ ANTHROPIC_API_KEY not found. Set it in Posit Cloud: App Settings → Variables, then Republish."
-
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
     metrics_text = "\n".join(f"  {k}: {v}" for k, v in metrics.items()) if metrics else "None"
 
-    prompt = f"""You are a helpful restaurant scheduling assistant for managers.
+    # Callout history summary
+    callout_text = "None"
+    if callout_history_list:
+        callout_text = "\n".join(
+            f"  • {h['shift']}: {h['absent']} marked absent" for h in callout_history_list
+        )
 
-Answer ONLY using the schedule data provided below.
-Do not invent employees, shifts, or hours not shown in the data.
-If the answer is not in the data, say so clearly.
-Be concise and manager-friendly.
+    # Active constraints summary
+    constraint_text = "None"
+    if active_constraints:
+        on  = [k for k, v in active_constraints.items() if v]
+        off = [k for k, v in active_constraints.items() if not v]
+        constraint_text = f"Active: {', '.join(on) or 'none'}"
+        if off:
+            constraint_text += f"\nDisabled: {', '.join(off)}"
+
+    system_prompt = """You are an expert restaurant scheduling assistant helping managers run their operation.
+
+ROLE HIERARCHY (important for replacement questions):
+- Manager can fill any role slot (Manager, Lead Server, Server, Host)
+- Lead Server can fill Lead Server, Server, or Host slots
+- Server can only fill Server slots
+- Host can only fill Host slots
+
+GUIDELINES:
+- Answer ONLY using the schedule data provided. Never invent employees or shifts.
+- For replacement questions, consider the role hierarchy above.
+- Be concise and direct — managers are busy.
+- Use bullet points for lists of employees or shifts.
+- When asked about fairness, reference the Hours Std Dev metric.
+- If asked who could cover a callout, check Available (Not Scheduled) column first.
+- Flag any schedule concerns proactively if they are relevant to the question."""
+
+    # Build the context block (sent once as the first user message)
+    context_block = f"""Here is the current schedule data:
 
 WEEKLY SCHEDULE:
 {sched_df.to_string(index=False)}
@@ -989,22 +1020,72 @@ EMPLOYEE SUMMARY:
 SCHEDULE METRICS:
 {metrics_text}
 
-LATEST CALL-OUT CHANGE:
-{change_log_text if change_log_text else "None"}
+ACTIVE CONSTRAINTS:
+{constraint_text}
 
-MANAGER QUESTION:
-{user_question}"""
+CALLOUT HISTORY THIS SESSION:
+{callout_text}
+
+LATEST CALLOUT CHANGE:
+{change_log_text if change_log_text else "None"}"""
+
+    # Build multi-turn message list
+    # First message always includes the full context + first question
+    messages = []
+    if not conversation_history:
+        messages = [{"role": "user", "content": context_block + f"\n\nQUESTION: {user_question}"}]
+    else:
+        # Prepend context to the very first message in history
+        first_q = conversation_history[0]["content"]
+        if not first_q.startswith("Here is the current schedule"):
+            conversation_history[0]["content"] = context_block + "\n\n" + first_q
+        messages = conversation_history + [{"role": "user", "content": user_question}]
 
     try:
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=512,
-            messages=[{"role": "user", "content": prompt}]
+            max_tokens=600,
+            system=system_prompt,
+            messages=messages
         )
         return msg.content[0].text
     except Exception as e:
         return f"❌ API error: {e}"
+
+
+def generate_schedule_insights(sched_df, summ_df, metrics):
+    """Auto-generate proactive insights after a schedule is created."""
+    if _anthropic_mod is None or sched_df is None or sched_df.empty:
+        return None
+    import os as _os2
+    api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
+    if not api_key or api_key == "your-api-key-here":
+        return None
+
+    metrics_text = "\n".join(f"  {k}: {v}" for k, v in metrics.items()) if metrics else ""
+
+    prompt = f"""You are a restaurant scheduling expert. Review this schedule and give 2-3 brief, specific insights a manager should know. Focus on: fairness concerns, coverage risks, employees with heavy/light loads, or anything unusual. Be concise — one sentence per insight, use bullet points.
+
+WEEKLY SCHEDULE:
+{sched_df.to_string(index=False)}
+
+EMPLOYEE SUMMARY:
+{summ_df.to_string(index=False) if summ_df is not None and not summ_df.empty else ""}
+
+METRICS:
+{metrics_text}"""
+
+    try:
+        client = _anthropic_mod.Anthropic(api_key=api_key)
+        msg = client.messages.create(
+            model=ANTHROPIC_MODEL,
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return msg.content[0].text
+    except Exception:
+        return None
 
 
 DEFAULT_EMP_DATA = [
@@ -2046,12 +2127,30 @@ def server(input, output, session):
 
     # ── AI Chat ──────────────────────────────────────────────────────
 
-    chat_messages = reactive.value([])   # list of {"role": "user"|"assistant", "text": str}
+    # chat_messages stores display history: [{"role": "user"|"assistant", "text": str}]
+    # api_history stores the API message format for multi-turn: [{"role":..,"content":..}]
+    chat_messages = reactive.value([])
+    api_history   = reactive.value([])
+    ai_insights   = reactive.value("")   # proactive insights shown at top of chat
 
     @reactive.effect
     @reactive.event(input.chat_clear)
     def handle_chat_clear():
         chat_messages.set([])
+        api_history.set([])
+
+    # Auto-generate insights when a NEW schedule is generated
+    @reactive.effect
+    def _generate_insights():
+        sched = sched_store.get()
+        summ  = summ_store.get()
+        m     = metrics_store.get()
+        if sched.empty or is_default.get():
+            ai_insights.set("")
+            return
+        insight = generate_schedule_insights(sched, summ, m)
+        if insight:
+            ai_insights.set(insight)
 
     @reactive.effect
     @reactive.event(input.chat_send)
@@ -2060,46 +2159,127 @@ def server(input, output, session):
         if not question:
             return
 
-        # Immediately show the user message
-        msgs = chat_messages.get() + [{"role": "user", "text": question}]
-        chat_messages.set(msgs)
+        # Show user message immediately
+        display = chat_messages.get() + [{"role": "user", "text": question}]
+        chat_messages.set(display)
         ui.update_text("chat_input", value="")
 
-        # Call AI and append response
+        # Build active constraints dict for context
+        active_constraints = {
+            "Availability":  input.availability(),
+            "Max Hours":     input.max_hours(),
+            "No Clopening":  input.no_clopening(),
+            "Fairness":      input.fairness(),
+        }
+
+        # Convert display history to API format for multi-turn
+        current_api = api_history.get()
+
         response = ask_schedule_ai(
-            user_question   = question,
-            sched_df        = sched_store.get(),
-            summ_df         = summ_store.get(),
-            metrics         = metrics_store.get(),
-            change_log_text = change_log.get(),
+            user_question        = question,
+            sched_df             = sched_store.get(),
+            summ_df              = summ_store.get(),
+            metrics              = metrics_store.get(),
+            change_log_text      = change_log.get(),
+            conversation_history = current_api.copy() if current_api else None,
+            active_constraints   = active_constraints,
+            callout_history_list = callout_history.get(),
         )
+
+        # Update display history
         chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": response}])
+
+        # Update API history for next turn
+        if not current_api:
+            # First turn — context is embedded in the question by ask_schedule_ai
+            api_history.set([
+                {"role": "user",      "content": question},
+                {"role": "assistant", "content": response},
+            ])
+        else:
+            api_history.set(current_api + [
+                {"role": "user",      "content": question},
+                {"role": "assistant", "content": response},
+            ])
 
     @output
     @render.ui
     def chat_history():
-        msgs = chat_messages.get()
-        if not msgs:
-            return ui.HTML(
-                '<span style="color:#adb5bd;">No messages yet. '
-                'Generate a schedule then ask a question.</span>'
-            )
+        msgs     = chat_messages.get()
+        insights = ai_insights.get()
+
         parts = []
-        for m in msgs:
-            if m["role"] == "user":
-                parts.append(
-                    f'<div style="margin-bottom:8px;">'
-                    f'<span style="font-weight:600; color:#0d6efd;">You:</span> '
-                    f'<span>{m["text"]}</span></div>'
-                )
-            else:
-                parts.append(
-                    f'<div style="margin-bottom:12px; padding:8px 10px; '
-                    f'background:#fff; border-radius:6px; border:1px solid #dee2e6;">'
-                    f'<span style="font-weight:600; color:#198754;">Assistant:</span><br>'
-                    f'<span style="white-space:pre-wrap;">{m["text"]}</span></div>'
-                )
+
+        # Proactive insights banner at top
+        if insights:
+            parts.append(
+                f'<div style="background:#e8f4fd; border:1px solid #bee5fd; border-radius:6px; '
+                f'padding:10px 12px; margin-bottom:12px; font-size:13px;">'
+                f'<div style="font-weight:600; color:#0a558c; margin-bottom:4px;">'
+                f'🔍 Schedule Insights</div>'
+                f'<div style="white-space:pre-wrap; color:#1a4a6b;">{insights}</div>'
+                f'</div>'
+            )
+
+        if not msgs:
+            parts.append(
+                '<div style="color:#adb5bd; font-size:13px;">'
+                'Ask a question about the schedule above, or click a suggestion below.</div>'
+            )
+        else:
+            for m in msgs:
+                if m["role"] == "user":
+                    parts.append(
+                        f'<div style="margin-bottom:8px;">'
+                        f'<span style="font-weight:600; color:#0d6efd;">You:</span> '
+                        f'<span>{m["text"]}</span></div>'
+                    )
+                else:
+                    parts.append(
+                        f'<div style="margin-bottom:12px; padding:8px 10px; '
+                        f'background:#fff; border-radius:6px; border:1px solid #dee2e6;">'
+                        f'<span style="font-weight:600; color:#198754;">Assistant:</span><br>'
+                        f'<span style="white-space:pre-wrap;">{m["text"]}</span></div>'
+                    )
+
+        # Suggested questions (context-aware)
+        sched = sched_store.get()
+        hist  = callout_history.get()
+        suggestions = [
+            "Who is working the most hours this week?",
+            "Which shifts are hardest to cover?",
+            "Is the schedule fair across all employees?",
+            "Who has the highest preference satisfaction?",
+        ]
+        if hist:
+            absent = hist[-1]["absent"]
+            shift  = hist[-1]["shift"]
+            suggestions.insert(0, f"Who could replace {absent} on {shift}?")
+        if not sched.empty:
+            suggestions.insert(0, "Are there any schedule concerns I should know about?")
+
+        sugg_html = "".join(
+            f'<button onclick="Shiny.setInputValue(\'chat_suggestion\', \'{s}\', {{priority: \'event\'}})" '
+            f'style="margin:3px; padding:4px 10px; font-size:12px; border:1px solid #0d6efd; '
+            f'border-radius:12px; background:#fff; color:#0d6efd; cursor:pointer; '
+            f'white-space:nowrap;">{s}</button>'
+            for s in suggestions[:5]
+        )
+        parts.append(
+            f'<div style="margin-top:10px; border-top:1px solid #f0f0f0; padding-top:8px;">'
+            f'<div style="font-size:11px; color:#adb5bd; margin-bottom:4px;">Suggested questions:</div>'
+            f'{sugg_html}</div>'
+        )
+
         return ui.HTML("".join(parts))
+
+    # Handle suggested question clicks
+    @reactive.effect
+    @reactive.event(input.chat_suggestion)
+    def handle_suggestion():
+        q = input.chat_suggestion()
+        if q:
+            ui.update_text("chat_input", value=q)
 
 
     # ── CSV Downloads ────────────────────────────────────────────────────────
