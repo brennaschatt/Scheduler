@@ -1375,7 +1375,7 @@ app_ui = ui.page_fluid(
                 ),
             ),
 
-            id="main_tabs", selected="📅 Schedule & Results",
+            id="main_tabs",
         ),
     )
 )
@@ -1386,6 +1386,11 @@ app_ui = ui.page_fluid(
 # ─────────────────────────────────────────────
 
 def server(input, output, session):
+
+    # Switch to Schedule & Results tab on first load so user sees the example schedule
+    @reactive.effect
+    def _init_tab():
+        ui.update_navs("main_tabs", selected="📅 Schedule & Results")
 
     # Pre-populate with example schedule so the app looks live on first load
     sched_store    = reactive.value(DEFAULT_SCHED_DF.copy())
