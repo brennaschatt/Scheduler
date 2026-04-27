@@ -450,12 +450,53 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         candidates.append(e)
 
     if not candidates:
-        return pd.DataFrame(), pd.DataFrame(), [
-            f"❌ No replacement found for {absent_emp} on {affected_shift_id} — "
-            f"all remaining employees violate at least one active constraint "
-            f"(availability, max hours, same-day shift, or no-clopening rule). "
-            f"Try unchecking a constraint and re-optimizing."
-        ]
+        # ── Emergency overtime suggestions ────────────────────────────────────
+        # No one fits under normal constraints — find who COULD cover if we
+        # relax clopening and/or max-hours rules, and surface them with warnings.
+        overtime_options = []
+        for e in employees:
+            if e == absent_emp or e in remaining:
+                continue
+            if (e, affected_shift_id) in blocked_pairs:
+                continue
+            if e in busy_same_day:
+                continue  # same-day double shift is always a hard no
+            reasons = []
+            # Check what rule(s) would be violated
+            if e in clopening_blocked:
+                reasons.append("clopening (PM→next AM)")
+            if constraints.get("availability", True) and avail_col in emp_df.columns:
+                val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
+                                    errors="coerce").fillna(0).values[0]
+                if int(val) == 0:
+                    reasons.append("marked unavailable")
+            if constraints.get("max_hours", True):
+                if hours_elsewhere[e] + HOURS_PER_SHIFT > max_hours[e]:
+                    overage = (hours_elsewhere[e] + HOURS_PER_SHIFT) - max_hours[e]
+                    reasons.append(f"overtime (+{overage:.0f}h over cap)")
+            if reasons:
+                overtime_options.append((e, roles.get(e, ""), reasons))
+
+        if overtime_options:
+            lines = [
+                f"❌ No standard replacement found for {absent_emp} on {affected_shift_id}.",
+                f"",
+                f"🚨 EMERGENCY OVERTIME — employees who could cover with rule exceptions:",
+                f"",
+            ]
+            for e, role, reasons in overtime_options:
+                lines.append(f"  • {e} ({role}) — would require: {', '.join(reasons)}")
+            lines += [
+                f"",
+                f"To assign one: uncheck the relevant constraint(s) in the sidebar and click Mark Absent & Re-Optimize.",
+            ]
+            return pd.DataFrame(), pd.DataFrame(), lines
+        else:
+            return pd.DataFrame(), pd.DataFrame(), [
+                f"❌ No replacement found for {absent_emp} on {affected_shift_id}. "
+                f"No employees are available even with overtime/clopening exceptions "
+                f"(all may be working the same day or previously called out)."
+            ]
 
     role_needs = {}
     for col, emp_role in role_map.items():
@@ -1816,6 +1857,21 @@ def server(input, output, session):
         """Results-tab banner — shows example explanation until user generates their own."""
         errs = error_msgs.get()
         if errs:
+            # Detect emergency overtime message (multi-line list with 🚨)
+            is_overtime = any("🚨" in str(e) or e == "" for e in errs)
+            if is_overtime:
+                lines_html = "".join(
+                    f"<div style='margin:1px 0; color:#{'842029' if e.startswith('❌') else ('856404' if e.startswith('🚨') else '333')};'>"
+                    f"{'<b>' if e.startswith('•') or e.startswith('🚨') or e.startswith('❌') else ''}"
+                    f"{e.replace(chr(10),'')}"
+                    f"{'</b>' if e.startswith('•') or e.startswith('🚨') or e.startswith('❌') else ''}"
+                    f"</div>"
+                    for e in errs
+                )
+                return ui.HTML(
+                    f'<div class="alert-box" style="background:#fff3cd; border:1px solid #ffc107; color:#333;">' +
+                    lines_html + '</div>'
+                )
             body = "".join(f"<div>❌ {e}</div>" for e in errs)
             return ui.HTML(f'<div class="alert-box alert-danger">{body}</div>')
         if not sched_store.get().empty:
@@ -1842,6 +1898,21 @@ def server(input, output, session):
     def status_banner():
         errs = error_msgs.get()
         if errs:
+            # Detect emergency overtime message (multi-line list with 🚨)
+            is_overtime = any("🚨" in str(e) or e == "" for e in errs)
+            if is_overtime:
+                lines_html = "".join(
+                    f"<div style='margin:1px 0; color:#{'842029' if e.startswith('❌') else ('856404' if e.startswith('🚨') else '333')};'>"
+                    f"{'<b>' if e.startswith('•') or e.startswith('🚨') or e.startswith('❌') else ''}"
+                    f"{e.replace(chr(10),'')}"
+                    f"{'</b>' if e.startswith('•') or e.startswith('🚨') or e.startswith('❌') else ''}"
+                    f"</div>"
+                    for e in errs
+                )
+                return ui.HTML(
+                    f'<div class="alert-box" style="background:#fff3cd; border:1px solid #ffc107; color:#333;">' +
+                    lines_html + '</div>'
+                )
             body = "".join(f"<div>❌ {e}</div>" for e in errs)
             return ui.HTML(f'<div class="alert-box alert-danger">{body}</div>')
         if not sched_store.get().empty:
