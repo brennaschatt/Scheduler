@@ -20,7 +20,7 @@ ROLES           = ["Manager", "Lead Server", "Server", "Host"]
 ALL_DAYS        = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 DAYS            = ALL_DAYS  # kept for backwards compat; filtered at runtime
 SHIFT_TYPES     = ["AM", "PM"]
-HOURS_PER_SHIFT = 6
+HOURS_PER_SHIFT = 6  # default fallback only — actual hours come from shift time inputs at runtime
 DAY_ORDER       = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 MAX_EMPLOYEES   = 100
 
@@ -108,22 +108,6 @@ def _build_default_summary():
         })
 
     return pd.DataFrame(rows), total_pref, total_max_pref, all_hours
-
-
-DEFAULT_SCHED_DF = pd.DataFrame(_DEFAULT_SCHED_ROWS)
-_default_summ, _total_pref, _total_max_pref, _all_hours = _build_default_summary()
-DEFAULT_SUMM_DF = _default_summ
-_overall_pref_pct = round(100 * _total_pref / _total_max_pref, 1) if _total_max_pref else 0
-DEFAULT_METRICS  = {
-    "Shifts Scheduled":         12,
-    "Total Staff Slots":        72,
-    "Avg Hours / Employee":     round(sum(_all_hours) / len(_all_hours), 1),
-    "Max Hours (any emp)":      max(_all_hours),
-    "Min Hours (any emp)":      min(_all_hours),
-    "Hours Std Dev (Fairness)": round(pd.Series(_all_hours).std(), 1),
-    "Pref Satisfaction":        f"{_overall_pref_pct}%",
-    "Staffing Coverage":        "100%",
-}
 
 
 # ─────────────────────────────────────────────
@@ -878,6 +862,22 @@ DEFAULT_EMP_DATA = [
     {"name": "Leo", "role": "Host", "max_hours": 40, "avail_Mon_AM": 1, "pref_Mon_AM": "1", "avail_Mon_PM": 1, "pref_Mon_PM": "5", "avail_Tue_AM": 1, "pref_Tue_AM": "4", "avail_Tue_PM": 1, "pref_Tue_PM": "5", "avail_Wed_AM": 1, "pref_Wed_AM": "1", "avail_Wed_PM": 1, "pref_Wed_PM": "3", "avail_Thu_AM": 1, "pref_Thu_AM": "1", "avail_Thu_PM": 1, "pref_Thu_PM": "3", "avail_Fri_AM": 1, "pref_Fri_AM": "5", "avail_Fri_PM": 1, "pref_Fri_PM": "1", "avail_Sat_AM": 1, "pref_Sat_AM": "3", "avail_Sat_PM": 1, "pref_Sat_PM": "4"},
     {"name": "Lily", "role": "Host", "max_hours": 40, "avail_Mon_AM": 1, "pref_Mon_AM": "2", "avail_Mon_PM": 1, "pref_Mon_PM": "1", "avail_Tue_AM": 1, "pref_Tue_AM": "5", "avail_Tue_PM": 1, "pref_Tue_PM": "1", "avail_Wed_AM": 1, "pref_Wed_AM": "4", "avail_Wed_PM": 1, "pref_Wed_PM": "4", "avail_Thu_AM": 1, "pref_Thu_AM": "5", "avail_Thu_PM": 1, "pref_Thu_PM": "5", "avail_Fri_AM": 1, "pref_Fri_AM": "4", "avail_Fri_PM": 1, "pref_Fri_PM": "4", "avail_Sat_AM": 1, "pref_Sat_AM": "1", "avail_Sat_PM": 1, "pref_Sat_PM": "1"},
 ]
+
+# Compute default summary/metrics — must come AFTER DEFAULT_EMP_DATA is defined
+DEFAULT_SCHED_DF = pd.DataFrame(_DEFAULT_SCHED_ROWS)
+_default_summ, _total_pref, _total_max_pref, _all_hours = _build_default_summary()
+DEFAULT_SUMM_DF = _default_summ
+_overall_pref_pct = round(100 * _total_pref / _total_max_pref, 1) if _total_max_pref else 0
+DEFAULT_METRICS  = {
+    "Shifts Scheduled":         12,
+    "Total Staff Slots":        72,
+    "Avg Hours / Employee":     round(sum(_all_hours) / len(_all_hours), 1),
+    "Max Hours (any emp)":      max(_all_hours),
+    "Min Hours (any emp)":      min(_all_hours),
+    "Hours Std Dev (Fairness)": round(pd.Series(_all_hours).std(), 1),
+    "Pref Satisfaction":        f"{_overall_pref_pct}%",
+    "Staffing Coverage":        "100%",
+}
 
 # ─────────────────────────────────────────────
 #  TEMPLATE FORM HELPERS
