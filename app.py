@@ -848,7 +848,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 # ─────────────────────────────────────────────
 
 # ── Configuration ───────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = "your-api-key-here"
+ANTHROPIC_API_KEY = "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"
 # Model options (use whichever your API key has access to):
 #   "claude-haiku-4-5-20251001"   ← fast, cheap
 #   "claude-sonnet-4-6"           ← recommended ✓
