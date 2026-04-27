@@ -1,5 +1,6 @@
 from shiny import App, reactive, render, ui
 import pandas as pd
+import os
 from ortools.sat.python import cp_model
 try:
     import anthropic as _anthropic_mod
@@ -688,16 +689,12 @@ def build_schedule(emp_df, shift_df, constraints):
 #  AI CHAT HELPER
 # ─────────────────────────────────────────────
 
-# ── Paste your Anthropic API key here ──────────────────────────────────────
-ANTHROPIC_API_KEY = "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"
-# ───────────────────────────────────────────────────────────────────────────
-
 def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     """Call Claude to answer manager questions about the current schedule."""
     if _anthropic_mod is None:
         return "❌ The anthropic package is not installed. Run: pip install anthropic"
-    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "your-api-key-here":
-        return "❌ Add your Anthropic API key to the ANTHROPIC_API_KEY variable at the top of the file."
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return "❌ Missing ANTHROPIC_API_KEY environment variable. Add it in Posit → Variables."
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
@@ -726,7 +723,7 @@ MANAGER QUESTION:
 {user_question}"""
 
     try:
-        client = _anthropic_mod.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = _anthropic_mod.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
         msg = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
