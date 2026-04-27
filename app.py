@@ -861,8 +861,11 @@ def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     """Call Claude to answer manager questions about the current schedule."""
     if _anthropic_mod is None:
         return "❌ The anthropic package is not installed. Run: pip install anthropic"
-    if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "your-api-key-here":
-        return "❌ ANTHROPIC_API_KEY environment variable not set. Add it in Posit Cloud: App Settings → Environment Variables."
+    # Read key fresh every call — Posit Cloud may inject it after module load
+    import os as _os2
+    api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
+    if not api_key or api_key == "your-api-key-here":
+        return "❌ ANTHROPIC_API_KEY not found. Set it in Posit Cloud: App Settings → Variables, then Republish."
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
@@ -891,7 +894,7 @@ MANAGER QUESTION:
 {user_question}"""
 
     try:
-        client = _anthropic_mod.Anthropic(api_key=ANTHROPIC_API_KEY)
+        client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_MODEL,
             max_tokens=512,
