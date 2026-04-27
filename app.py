@@ -866,10 +866,7 @@ def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
     if not api_key or api_key == "your-api-key-here":
         return "❌ ANTHROPIC_API_KEY not found. Set it in Posit Cloud: App Settings → Variables, then Republish."
-    # Temporary debug — remove after fixing
-    key_preview = f"{api_key[:12]}...{api_key[-4:]}" if len(api_key) > 16 else f"[{len(api_key)} chars]"
-    if not api_key.startswith("sk-ant-"):
-        return f"❌ Key format looks wrong. Got: {key_preview}. Anthropic keys start with sk-ant-"
+
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
@@ -1355,32 +1352,34 @@ app_ui = ui.page_fluid(
                         ui.div(style="height:8px;"),
                         ui.output_data_frame("summary"),
                     ),
-                    ui.nav_panel(
-                        "🤖 AI Assistant",
-                        ui.div(style="height:8px;"),
-                        ui.p("Ask questions about the schedule — who is working, fairness, replacements, and more.",
-                             style="color:#6c757d; font-size:13px; margin-bottom:10px;"),
-                        ui.div(
-                            ui.output_ui("chat_history"),
-                            style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; "
-                                  "padding:12px; min-height:100px; max-height:420px; overflow-y:auto; "
-                                  "margin-bottom:10px; font-size:14px;"
-                        ),
-                        ui.div(
-                            ui.div(
-                                ui.input_text("chat_input", None,
-                                              placeholder="e.g. Who is working Monday AM?  Who has the fewest shifts?",
-                                              width="100%"),
-                                style="flex:1;"
-                            ),
-                            ui.div(
-                                ui.input_action_button("chat_send", "Ask", class_="btn-primary"),
-                                style="margin-left:8px;"
-                            ),
-                            style="display:flex; align-items:flex-start;"
-                        ),
-                    ),
                     id="results_tabs",
+                ),
+            ),
+
+            # ══ TAB C: AI ASSISTANT ════════════════════════════════════
+            ui.nav_panel(
+                "🤖 AI Assistant",
+                ui.div(style="height:14px;"),
+                ui.p("Ask questions about the schedule — who is working, fairness, replacements, and more.",
+                     style="color:#6c757d; font-size:13px; margin-bottom:10px;"),
+                ui.div(
+                    ui.output_ui("chat_history"),
+                    style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; "
+                          "padding:12px; min-height:200px; max-height:520px; overflow-y:auto; "
+                          "margin-bottom:10px; font-size:14px;"
+                ),
+                ui.div(
+                    ui.div(
+                        ui.input_text("chat_input", None,
+                                      placeholder="e.g. Who is working Monday AM?  Who has the fewest shifts?",
+                                      width="100%"),
+                        style="flex:1;"
+                    ),
+                    ui.div(
+                        ui.input_action_button("chat_send", "Ask", class_="btn-primary"),
+                        style="margin-left:8px;"
+                    ),
+                    style="display:flex; align-items:flex-start;"
                 ),
             ),
 
