@@ -1375,7 +1375,7 @@ app_ui = ui.page_fluid(
                 ),
             ),
 
-            id="main_tabs",
+            id="main_tabs", selected="📅 Schedule & Results",
         ),
     )
 )
@@ -1746,7 +1746,10 @@ def server(input, output, session):
             )
         return ui.HTML(
             '<div class="alert-box alert-info">'
-            '⬆️ Go to Setup tab, fill in your data, then click Generate Schedule.</div>'
+            '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
+            'not optimizer-generated, so preference satisfaction is lower than it could be. '
+            'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
+            'and see the real result.</div>'
         )
 
     @output
@@ -1764,9 +1767,7 @@ def server(input, output, session):
             )
         return ui.HTML(
             '<div class="alert-box alert-info">'
-            '📋 <strong>Example schedule loaded.</strong> This is a hand-built rotation — not optimizer-generated. '
-            'Preference satisfaction will be lower than an optimized schedule. '
-            'Click <strong>Generate Schedule</strong> to run the optimizer on the sample data and see the real result.</div>'
+            '⬆️ Fill in your employees and shift requirements, then click Generate Schedule.</div>'
         )
 
     @output
