@@ -1439,9 +1439,8 @@ def server(input, output, session):
     callout_log    = reactive.value(set())
     shift_hours    = reactive.value({"AM": 6.0, "PM": 6.0})
     n_emp_rows     = reactive.value(len(DEFAULT_EMP_DATA))
-    is_default        = reactive.value(True)
-    callout_history   = reactive.value([])   # list of callout change strings
-    chat_messages_val = reactive.value([])   # renamed to avoid collision
+    is_default     = reactive.value(True)
+    callout_history = reactive.value([])
 
     # ── Employee table — entire table from one output_ui ─────────────
     @output
@@ -1739,10 +1738,6 @@ def server(input, output, session):
             return
 
         callout_log.set(callout_log.get() | {(absent_emp, affected_shift)})
-        # Append to callout history log
-        hist = callout_history.get()
-        hist = hist + [{"shift": affected_shift, "absent": absent_emp, "log": log}]
-        callout_history.set(hist)
 
         def _all_workers_from_row(df, shift_id):
             row = df[df["Shift"] == shift_id]
@@ -1772,6 +1767,9 @@ def server(input, output, session):
             log = f"✅ {affected_shift}: existing coverage sufficient — no swap needed."
 
         change_log.set(log)
+        # Append to callout history now that log string is built
+        hist = callout_history.get()
+        callout_history.set(hist + [{"shift": affected_shift, "absent": absent_emp, "log": log}])
         error_msgs.set([])
         sched_store.set(new_sched)
         summ_store.set(new_summ)
