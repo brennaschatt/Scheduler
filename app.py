@@ -509,13 +509,20 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
     updated.loc[updated["Shift"] == affected_shift_id, "# Staff"]        = len(selected)
     if "Available (Not Scheduled)" in updated.columns:
         avail_col = f"{affected_shift_id}_Avail"
+        # Exclude: already scheduled, the called-out employee, and anyone
+        # previously called out for this shift (in blocked_pairs)
+        blocked_for_shift = {e for e, s in (blocked_pairs or set()) if s == affected_shift_id}
+        blocked_for_shift.add(absent_emp)
         if avail_col in emp_df.columns:
             still_avail = [e for e in employees
                            if e not in selected_names
+                           and e not in blocked_for_shift
                            and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
                                                  errors="coerce").fillna(0).values[0]) == 1]
         else:
-            still_avail = [e for e in employees if e not in selected_names]
+            still_avail = [e for e in employees
+                           if e not in selected_names
+                           and e not in blocked_for_shift]
         updated.loc[updated["Shift"] == affected_shift_id, "Available (Not Scheduled)"] = \
             ", ".join(still_avail)
     return updated, _rebuild_summary(emp_df, shift_df, updated, roles, shift_type), []
