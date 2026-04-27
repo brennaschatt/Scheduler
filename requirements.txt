@@ -1,0 +1,5 @@
+shiny
+pandas
+ortools
+openpyxl
+anthropic
