@@ -1403,6 +1403,7 @@ def server(input, output, session):
     callout_log    = reactive.value(set())
     shift_hours    = reactive.value({"AM": 6.0, "PM": 6.0})
     n_emp_rows     = reactive.value(len(DEFAULT_EMP_DATA))
+    is_default     = reactive.value(True)   # True = showing example, not user-generated
 
     # ── Employee table — entire table from one output_ui ─────────────
     @output
@@ -1662,6 +1663,7 @@ def server(input, output, session):
         shift_reactive.set(shift)
         change_log.set("")
         callout_log.set(set())
+        is_default.set(False)
         run_optimization(emp, shift)
         # Auto-navigate to results tab so manager sees the schedule immediately
         ui.update_navs("main_tabs", selected="📅 Schedule & Results")
@@ -1738,12 +1740,20 @@ def server(input, output, session):
     @output
     @render.ui
     def status_banner2():
-        """Mirrors status_banner for the Results tab."""
+        """Results-tab banner — shows example explanation until user generates their own."""
         errs = error_msgs.get()
         if errs:
             body = "".join(f"<div>❌ {e}</div>" for e in errs)
             return ui.HTML(f'<div class="alert-box alert-danger">{body}</div>')
         if not sched_store.get().empty:
+            if is_default.get():
+                return ui.HTML(
+                    '<div class="alert-box alert-info">'
+                    '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
+                    'not optimizer-generated, so preference satisfaction (65.2%) is lower than it could be. '
+                    'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
+                    'and see the real result.</div>'
+                )
             n = len(sched_store.get())
             return ui.HTML(
                 f'<div class="alert-box alert-success">'
@@ -1751,10 +1761,7 @@ def server(input, output, session):
             )
         return ui.HTML(
             '<div class="alert-box alert-info">'
-            '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
-            'not optimizer-generated, so preference satisfaction is lower than it could be. '
-            'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
-            'and see the real result.</div>'
+            '⬆️ Fill in Setup tab, then click Generate Schedule.</div>'
         )
 
     @output
