@@ -1244,7 +1244,7 @@ app_ui = ui.page_fluid(
                     ui.tags.tbody(
                         ui.tags.tr(
                             ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                            ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                            ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
                         ),
                         ui.tags.tr(
                             ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
