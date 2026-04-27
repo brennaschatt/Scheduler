@@ -848,10 +848,12 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 # ─────────────────────────────────────────────
 
 # ── Configuration ───────────────────────────────────────────────────────────
-ANTHROPIC_API_KEY = "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"
-# Model options (use whichever your API key has access to):
-#   "claude-haiku-4-5-20251001"   ← fast, cheap
-#   "claude-sonnet-4-6"           ← recommended ✓
+# API key is read from the ANTHROPIC_API_KEY environment variable.
+# Set it in Posit Cloud: App Settings → Environment Variables → ANTHROPIC_API_KEY
+# For local development you can also set it in your shell:
+#   export ANTHROPIC_API_KEY="sk-ant-..."
+import os as _os
+ANTHROPIC_API_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL   = "claude-sonnet-4-6"
 # ───────────────────────────────────────────────────────────────────────────
 
@@ -860,7 +862,7 @@ def ask_schedule_ai(user_question, sched_df, summ_df, metrics, change_log_text):
     if _anthropic_mod is None:
         return "❌ The anthropic package is not installed. Run: pip install anthropic"
     if not ANTHROPIC_API_KEY or ANTHROPIC_API_KEY == "your-api-key-here":
-        return "❌ Add your Anthropic API key to the ANTHROPIC_API_KEY variable at the top of the file."
+        return "❌ ANTHROPIC_API_KEY environment variable not set. Add it in Posit Cloud: App Settings → Environment Variables."
     if sched_df is None or sched_df.empty:
         return "❌ No schedule generated yet. Please generate a schedule first."
 
