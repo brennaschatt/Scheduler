@@ -1037,7 +1037,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 import os as _os
 ANTHROPIC_API_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL      = "claude-sonnet-4-6"   # used for insights (quality)
-ANTHROPIC_CHAT_MODEL = "claude-3-haiku-20240307"  # fast model for chat responses
+ANTHROPIC_CHAT_MODEL = "claude-sonnet-4-6"  # same model as insights
 # ───────────────────────────────────────────────────────────────────────────
 
 def ask_schedule_ai(user_question, sched_df, summ_df, metrics,
