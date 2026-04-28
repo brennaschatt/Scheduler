@@ -212,35 +212,54 @@ def smart_read(file_info):
 
 def build_emp_df_from_inputs(input, n_emp, open_days):
     active_shifts = [f"{d}_{s}" for d in open_days for s in SHIFT_TYPES]
+
+    def _get(key, default=None):
+        """Safely read a Shiny input, returning default if not registered yet."""
+        try:
+            return input[key]()
+        except Exception:
+            return default
+
     rows = []
     for i in range(n_emp):
-        name = input[f"t_name_{i}"]()
-        if not name or not name.strip():
+        # Use DEFAULT_EMP_DATA as fallback if input not yet registered
+        default_emp = DEFAULT_EMP_DATA[i] if i < len(DEFAULT_EMP_DATA) else {}
+
+        name = _get(f"t_name_{i}", default_emp.get("name", ""))
+        if not name or not str(name).strip():
             continue
+        role     = _get(f"t_role_{i}", default_emp.get("role", ROLES[0]))
+        max_hrs  = _get(f"t_maxh_{i}", default_emp.get("max_hours", 40))
         row = {
-            "Name":      name.strip(),
-            "Role":      input[f"t_role_{i}"](),
-            "Max_Hours": int(input[f"t_maxh_{i}"]()),
+            "Name":      str(name).strip(),
+            "Role":      role or ROLES[0],
+            "Max_Hours": int(max_hrs or 40),
         }
         for sid in active_shifts:
-            raw_avail = input[f"t_avail_{i}_{sid}"]()
+            raw_avail = _get(f"t_avail_{i}_{sid}", default_emp.get(f"avail_{sid}", 1))
+            raw_pref  = _get(f"t_pref_{i}_{sid}", default_emp.get(f"pref_{sid}", "3"))
             row[f"{sid}_Avail"] = 1 if raw_avail else 0
-            row[f"{sid}_Pref"]  = int(input[f"t_pref_{i}_{sid}"]())
+            row[f"{sid}_Pref"]  = int(raw_pref or 3)
         rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
 def build_shift_df_from_inputs(input, open_days):
+    def _get(key, default=None):
+        try: return input[key]()
+        except Exception: return default
+
     rows = []
     for day in open_days:
         for st in SHIFT_TYPES:
             sid = f"{day}_{st}"
-            mgr  = int(input[f"s_mgr_{sid}"]())
-            lead = int(input[f"s_lead_{sid}"]())
-            srv  = int(input[f"s_srv_{sid}"]())
-            host = int(input[f"s_host_{sid}"]())
-            t_start = input[f"t_start_{sid}"]()
-            t_end   = input[f"t_end_{sid}"]()
+            default_start, default_end = _DEFAULT_TIMES.get(st, ("8:00 AM", "8:00 PM"))
+            mgr     = int(_get(f"s_mgr_{sid}",  1) or 1)
+            lead    = int(_get(f"s_lead_{sid}", 1) or 1)
+            srv     = int(_get(f"s_srv_{sid}",  3) or 3)
+            host    = int(_get(f"s_host_{sid}", 1) or 1)
+            t_start = _get(f"t_start_{sid}", default_start) or default_start
+            t_end   = _get(f"t_end_{sid}",   default_end)   or default_end
             rows.append({
                 "Shift_ID":    sid,
                 "Day":         day,
@@ -2172,26 +2191,29 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.run)
     def handle_run():
-        open_days = get_open_days()
-        if not open_days:
-            error_msgs.set(["Select at least one open day before generating a schedule."])
-            return
-        emp = build_emp_df_from_inputs(input, n_emp_rows.get(), open_days)
-        if emp is None or emp.empty:
-            error_msgs.set(["Add at least one employee name in the Employees tab."])
-            return
-        shift = build_shift_df_from_inputs(input, open_days)
-        # Build per-shift-ID hours dict from the T_Start/T_End columns
-        sh = get_shift_hours_from_df(shift)
-        shift_hours.set(sh)
-        emp_reactive.set(emp)
-        shift_reactive.set(shift)
-        change_log.set("")
-        callout_log.set(set())
-        is_default.set(False)
-        run_optimization(emp, shift)
-        # Auto-navigate to results tab so manager sees the schedule immediately
-        ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+        try:
+            open_days = get_open_days()
+            if not open_days:
+                error_msgs.set(["Select at least one open day before generating a schedule."])
+                return
+            emp = build_emp_df_from_inputs(input, n_emp_rows.get(), open_days)
+            if emp is None or emp.empty:
+                error_msgs.set(["Add at least one employee name in the Employees tab."])
+                return
+            shift = build_shift_df_from_inputs(input, open_days)
+            sh = get_shift_hours_from_df(shift)
+            shift_hours.set(sh)
+            emp_reactive.set(emp)
+            shift_reactive.set(shift)
+            change_log.set("")
+            callout_log.set(set())
+            is_default.set(False)
+            run_optimization(emp, shift)
+            ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+        except Exception as _e:
+            import traceback
+            error_msgs.set([f"❌ Unexpected error: {_e}. Check the Setup tab for missing data."])
+            traceback.print_exc()
 
     # ── Call-out ─────────────────────────────────────────────────────
     @reactive.effect
