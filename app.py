@@ -1691,9 +1691,26 @@ app_ui = ui.page_fluid(
                     id="chat_messages_area",
                     style="padding:12px; overflow-y:auto; height:340px; font-size:13px; background:#f8f9fa;"
                 ),
-                # Suggested questions pills
+                # Suggested questions — static HTML so they show even when panel was hidden
                 ui.tags.div(
-                    ui.output_ui("chat_suggestions"),
+                    ui.tags.p("Suggested:", style="font-size:10px; color:#adb5bd; margin:0 0 3px;"),
+                    ui.tags.div(
+                        *[
+                            ui.tags.button(
+                                s,
+                                onclick=f"Shiny.setInputValue('chat_suggestion', '{s}', {{priority: 'event'}}); return false;",
+                                style="margin:2px 3px; padding:3px 9px; font-size:11px; border:1px solid #0d6efd; border-radius:12px; background:#fff; color:#0d6efd; cursor:pointer; white-space:nowrap;"
+                            )
+                            for s in [
+                                "Who is working the most hours this week?",
+                                "Is the schedule fair across all employees?",
+                                "Which shifts are hardest to cover?",
+                                "Who has the lowest preference satisfaction?",
+                                "Are there any schedule concerns I should know about?",
+                            ]
+                        ],
+                        style="display:flex; flex-wrap:wrap;"
+                    ),
                     style="padding:6px 12px 2px; background:#fff; border-top:1px solid #f0f0f0;"
                 ),
                 # Input area
@@ -1728,6 +1745,8 @@ app_ui = ui.page_fluid(
                         panel.style.display = 'flex';
                         btn.textContent = '✕ Close Chat';
                         scrollChatToBottom();
+                        // Trigger Shiny to refresh any dynamic outputs now visible
+                        setTimeout(function() { $(window).trigger('resize'); }, 50);
                     } else {
                         panel.style.display = 'none';
                         btn.textContent = '🤖 AI Assistant';
@@ -1780,6 +1799,7 @@ def server(input, output, session):
         callout_log.set(set())
         callout_history.set([])
         is_default.set(True)
+        ai_insights.set([])
         n_emp_rows.set(len(DEFAULT_EMP_DATA))
 
     # Pre-populate with example schedule so the app looks live on first load
@@ -2006,14 +2026,21 @@ def server(input, output, session):
         sched_store.set(sched)
         summ_store.set(summ)
         error_msgs.set(errs)
-        metrics_store.set(
-            compute_metrics(sched, summ, clean_shift(shift_df)) if not sched.empty else {}
-        )
+        m = compute_metrics(sched, summ, clean_shift(shift_df)) if not sched.empty else {}
+        metrics_store.set(m)
         ec = clean_emp(emp_df)
         sc = clean_shift(shift_df)
         if "Shift_ID" in sc.columns:
             ui.update_select("shift_sel", choices=sc["Shift_ID"].tolist())
         # emp_sel is now dynamic (output_ui) — updated reactively via emp_sel_ui
+
+        # Auto-generate insights if schedule succeeded
+        if not sched.empty:
+            ai_insights.set([{"issue": "⏳ Analyzing schedule...", "suggestion": "",
+                              "action": "none", "emp_a": "", "shift_from": "",
+                              "emp_b": "", "shift_to": ""}])
+            suggestions = generate_schedule_insights(sched, summ, m)
+            ai_insights.set(suggestions if suggestions else [])
 
     # ── Generate schedule ────────────────────────────────────────────
     def get_open_days():
@@ -2056,7 +2083,6 @@ def server(input, output, session):
         change_log.set("")
         callout_log.set(set())
         is_default.set(False)
-        ai_insights.set([])   # clear stale insights when new schedule generated
         run_optimization(emp, shift)
         # Auto-navigate to results tab so manager sees the schedule immediately
         ui.update_navs("main_tabs", selected="📅 Schedule & Results")
@@ -2436,13 +2462,15 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.generate_insights)
     def _on_generate_insights():
+        """Allow manager to manually re-run insights at any time."""
         sched = sched_store.get()
         summ  = summ_store.get()
         m     = metrics_store.get()
         if sched.empty:
             return
-        ai_insights.set([{"issue": "⏳ Analyzing schedule...", "suggestion": "", "action": "none",
-                           "emp_a": "", "shift_from": "", "emp_b": "", "shift_to": ""}])
+        ai_insights.set([{"issue": "⏳ Re-analyzing schedule...", "suggestion": "",
+                          "action": "none", "emp_a": "", "shift_from": "",
+                          "emp_b": "", "shift_to": ""}])
         suggestions = generate_schedule_insights(sched, summ, m)
         ai_insights.set(suggestions if suggestions else [])
 
