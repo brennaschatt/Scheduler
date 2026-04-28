@@ -1877,7 +1877,8 @@ app_ui = ui.page_fluid(
                     "position:fixed; bottom:72px; right:24px; z-index:1049; "
                     "width:380px; border-radius:12px; "
                     "box-shadow:0 8px 32px rgba(0,0,0,0.18); "
-                    "display:none; flex-direction:column; "
+                    "display:flex; flex-direction:column; "
+                    "visibility:hidden; pointer-events:none; "
                     "border:1px solid #dee2e6; background:#fff;"
                 )
             ),
@@ -1886,14 +1887,15 @@ app_ui = ui.page_fluid(
                 function toggleChat() {
                     var panel = document.getElementById('chat_float_panel');
                     var btn   = document.getElementById('chat_toggle_btn');
-                    if (panel.style.display === 'none' || panel.style.display === '') {
-                        panel.style.display = 'flex';
+                    var hidden = panel.style.visibility === 'hidden' || panel.style.visibility === '';
+                    if (hidden) {
+                        panel.style.visibility = 'visible';
+                        panel.style.pointerEvents = 'auto';
                         btn.textContent = '✕ Close Chat';
                         scrollChatToBottom();
-                        // Trigger Shiny to refresh any dynamic outputs now visible
-                        setTimeout(function() { $(window).trigger('resize'); }, 50);
                     } else {
-                        panel.style.display = 'none';
+                        panel.style.visibility = 'hidden';
+                        panel.style.pointerEvents = 'none';
                         btn.textContent = '🤖 AI Assistant';
                     }
                 }
@@ -2668,7 +2670,12 @@ def server(input, output, session):
             traceback.print_exc()
             response = f"❌ Error: {e}"
 
-        chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": response}])
+        # Strip markdown formatting from response
+        import re as _re
+        clean = _re.sub(r"#{1,3}\s*", "", response)
+        clean = _re.sub(r"\*\*(.+?)\*\*", r"\1", clean)
+        clean = _re.sub(r"\*(.+?)\*", r"\1", clean)
+        chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": clean}])
 
         if not current_api:
             api_history.set([
