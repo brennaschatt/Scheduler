@@ -2392,7 +2392,7 @@ def server(input, output, session):
         df = sched_store.get()
         if df.empty:
             return df
-        return render.DataGrid(df, width="100%", height="420px")
+        return render.DataGrid(df, width="100%")
 
     @output
     @render.data_frame
@@ -2401,7 +2401,7 @@ def server(input, output, session):
         if df.empty:
             return df
         cols = [c for c in df.columns if c not in ("Pref_Score", "Max_Pref_Score")]
-        return render.DataGrid(df[cols], width="100%", height="420px")
+        return render.DataGrid(df[cols], width="100%")
 
 
     # ── AI Chat ──────────────────────────────────────────────────────
