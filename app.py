@@ -295,6 +295,37 @@ def build_shift_df_from_inputs(input, open_days):
                 "T_Start":     t_start,
                 "T_End":       t_end,
             })
+
+    # Validate: PM start must be >= AM end for each day (no overlapping shifts)
+    import re as _re3
+    def _to_hour(t):
+        if not t: return None
+        m = _re3.match(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM|A|P)?", t.strip().upper())
+        if not m: return None
+        h, mins = int(m.group(1)), int(m.group(2) or 0)
+        p = m.group(3) or ""
+        if p in ("P","PM") and h != 12: h += 12
+        elif p in ("A","AM") and h == 12: h = 0
+        return h + mins/60
+
+    df_temp = pd.DataFrame(rows)
+    overlap_errors = []
+    for day in open_days:
+        am_r = df_temp[df_temp["Shift_ID"] == f"{day}_AM"] if not df_temp.empty else pd.DataFrame()
+        pm_r = df_temp[df_temp["Shift_ID"] == f"{day}_PM"] if not df_temp.empty else pd.DataFrame()
+        if am_r.empty or pm_r.empty:
+            continue
+        ae = _to_hour(am_r.iloc[0].get("T_End",   ""))
+        ps = _to_hour(pm_r.iloc[0].get("T_Start", ""))
+        if ae is not None and ps is not None and ps < ae:
+            overlap_errors.append(
+                f"❌ {day}: PM shift starts at {pm_r.iloc[0].get('T_Start','')} "
+                f"but AM shift ends at {am_r.iloc[0].get('T_End','')}. "
+                f"PM start must be at or after AM end."
+            )
+    if overlap_errors:
+        return pd.DataFrame(), overlap_errors
+
     return pd.DataFrame(rows)
 
 
@@ -1736,7 +1767,7 @@ app_ui = ui.page_fluid(
                             ui.tags.tbody(
                                 ui.tags.tr(
                                     ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                                    ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                    ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
                                 ),
                                 ui.tags.tr(
                                     ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
@@ -2227,7 +2258,15 @@ def server(input, output, session):
             if emp is None or emp.empty:
                 error_msgs.set(["Add at least one employee name in the Employees tab."])
                 return
-            shift = build_shift_df_from_inputs(input, open_days)
+            shift_result = build_shift_df_from_inputs(input, open_days)
+            # build_shift_df_from_inputs returns (df, errors) on overlap, or df on success
+            if isinstance(shift_result, tuple):
+                shift, shift_errs = shift_result
+                if shift_errs:
+                    error_msgs.set(shift_errs)
+                    return
+            else:
+                shift = shift_result
             sh = get_shift_hours_from_df(shift)
             shift_hours.set(sh)
             emp_reactive.set(emp)
@@ -2379,8 +2418,8 @@ def server(input, output, session):
             if is_default.get():
                 return ui.HTML(
                     '<div class="alert-box alert-info">'
-                    '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
-                    'not optimizer-generated, so preference satisfaction (65.2%) is lower than it could be. '
+                    '📋 <strong>Example schedule shown.</strong> This is a hand-built example rotation — '
+                    'not optimizer-generated, so preference satisfaction is lower than it could be. '
                     'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
                     'and see the real result.</div>'
                 )
