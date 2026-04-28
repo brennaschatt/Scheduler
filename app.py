@@ -394,15 +394,11 @@ def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type, shift_hours_
         pref_score = 0
         for s in assigned:
             pc = f"{s}_Pref"
-            if pc in emp_df.columns:
-                pref_score += int(pd.to_numeric(
-                    emp_df.loc[emp_df["Name"] == e, pc], errors="coerce").fillna(1).values[0])
+            pref_score += _pref(emp_ix, e, pc)
         all_prefs = []
         for s in shift_ids:
             pc = f"{s}_Pref"
-            if pc in emp_df.columns:
-                all_prefs.append(int(pd.to_numeric(
-                    emp_df.loc[emp_df["Name"] == e, pc], errors="coerce").fillna(1).values[0]))
+            all_prefs.append(_pref(emp_ix, e, pc))
         max_pref = sum(sorted(all_prefs, reverse=True)[:n]) if n else 0
         summ_rows.append({
             "Name":            e,
@@ -2808,7 +2804,5 @@ def server(input, output, session):
         df[cols].to_csv(buf, index=False)
         yield buf.getvalue()
 
-
-app = App(app_ui, server)
 
 app = App(app_ui, server)
