@@ -1115,7 +1115,6 @@ LAST CHANGE: {change_log_text or "None"}"""
         messages = history_copy + [{"role": "user", "content": user_question}]
 
     try:
-        print(f"[API] model={ANTHROPIC_CHAT_MODEL} msgs={len(messages)} key={api_key[:12]}...")
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_CHAT_MODEL,
@@ -1123,7 +1122,6 @@ LAST CHANGE: {change_log_text or "None"}"""
             system=system_prompt,
             messages=messages
         )
-        print(f"[API] success, tokens used: {msg.usage}")
         return msg.content[0].text
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -2165,7 +2163,8 @@ def server(input, output, session):
         )
 
         # ── Core optimizer ───────────────────────────────────────────────
-    def run_optimization(emp_df, shift_df):
+    async def run_optimization(emp_df, shift_df):
+        import asyncio
         constraints = {
             "availability": input.availability(),
             "max_hours":    input.max_hours(),
@@ -2173,7 +2172,11 @@ def server(input, output, session):
             "fairness":     input.fairness(),
         }
         sh = shift_hours.get()
-        sched, summ, errs = build_schedule(emp_df, shift_df, constraints, shift_hours=sh)
+        # Run heavy solver in thread pool so UI stays responsive
+        loop = asyncio.get_event_loop()
+        sched, summ, errs = await loop.run_in_executor(
+            None, lambda: build_schedule(emp_df, shift_df, constraints, shift_hours=sh)
+        )
         sched_store.set(sched)
         summ_store.set(summ)
         error_msgs.set(errs)
@@ -2183,14 +2186,15 @@ def server(input, output, session):
         sc = clean_shift(shift_df)
         if "Shift_ID" in sc.columns:
             ui.update_select("shift_sel", choices=sc["Shift_ID"].tolist())
-        # emp_sel is now dynamic (output_ui) — updated reactively via emp_sel_ui
 
-        # Auto-generate insights if schedule succeeded
+        # Auto-generate insights in background
         if not sched.empty:
             ai_insights.set([{"issue": "⏳ Analyzing schedule...", "suggestion": "",
                               "action": "none", "emp_a": "", "shift_from": "",
                               "emp_b": "", "shift_to": ""}])
-            suggestions = generate_schedule_insights(sched, summ, m)
+            suggestions = await loop.run_in_executor(
+                None, lambda: generate_schedule_insights(sched, summ, m)
+            )
             ai_insights.set(suggestions if suggestions else [])
 
     # ── Generate schedule ────────────────────────────────────────────
@@ -2216,7 +2220,8 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.run)
-    def handle_run():
+    async def handle_run():
+        import asyncio
         try:
             open_days = get_open_days()
             if not open_days:
@@ -2244,7 +2249,8 @@ def server(input, output, session):
     # ── Call-out ─────────────────────────────────────────────────────
     @reactive.effect
     @reactive.event(input.callout)
-    def handle_callout():
+    async def handle_callout():
+        import asyncio
         emp  = emp_reactive.get()
         shift = shift_reactive.get()
         curr  = sched_store.get()
@@ -2262,11 +2268,23 @@ def server(input, output, session):
             "fairness":     input.fairness(),
         }
 
-        new_sched, new_summ, errs = resolve_callout(
-            emp_df=emp, shift_df=shift, current_sched_df=curr,
-            absent_emp=absent_emp, affected_shift_id=affected_shift,
-            constraints=constraints, blocked_pairs=callout_log.get(),
-        )
+        # Run resolve_callout in executor so it doesn't block the UI
+        loop = asyncio.get_event_loop()
+        blocked = callout_log.get()
+        sh_map  = shift_hours.get()
+        try:
+            new_sched, new_summ, errs = await loop.run_in_executor(
+                None, lambda: resolve_callout(
+                    emp_df=emp, shift_df=shift, current_sched_df=curr,
+                    absent_emp=absent_emp, affected_shift_id=affected_shift,
+                    constraints=constraints, blocked_pairs=blocked,
+                    shift_hours_map=sh_map,
+                )
+            )
+        except Exception as _e:
+            import traceback; traceback.print_exc()
+            error_msgs.set([f"❌ Callout error: {_e}"])
+            return
 
         if errs:
             error_msgs.set(errs)
@@ -2631,20 +2649,19 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.chat_send)
-    def handle_chat():
-        import copy as _copy
+    async def handle_chat():
+        import asyncio, copy as _copy, re as _re
 
         question = input.chat_input().strip()
         if not question:
             return
 
         ui.update_text("chat_input", value="")
-
-        # Add user message to display
         current_api = api_history.get()
+
+        # Show user message immediately
         chat_messages.set(chat_messages.get() + [{"role": "user", "text": question}])
 
-        # Make API call synchronously — Shiny will update UI after this returns
         constraints = {
             "Availability": input.availability(),
             "Max Hours":    input.max_hours(),
@@ -2652,41 +2669,46 @@ def server(input, output, session):
             "Fairness":     input.fairness(),
         }
 
+        # Snapshot data for the thread
+        sched    = sched_store.get()
+        summ     = summ_store.get()
+        met      = metrics_store.get()
+        cl       = change_log.get()
+        hist     = _copy.deepcopy(current_api) if current_api else None
+        callouts = callout_history.get()
+
+        # Run blocking API call in executor so event loop stays free
+        loop = asyncio.get_event_loop()
         try:
-            print(f"[CHAT] Calling API for: {question[:50]}")
-            response = ask_schedule_ai(
-                user_question        = question,
-                sched_df             = sched_store.get(),
-                summ_df              = summ_store.get(),
-                metrics              = metrics_store.get(),
-                change_log_text      = change_log.get(),
-                conversation_history = _copy.deepcopy(current_api) if current_api else None,
-                active_constraints   = constraints,
-                callout_history_list = callout_history.get(),
+            response = await loop.run_in_executor(
+                None,
+                lambda: ask_schedule_ai(
+                    user_question        = question,
+                    sched_df             = sched,
+                    summ_df              = summ,
+                    metrics              = met,
+                    change_log_text      = cl,
+                    conversation_history = hist,
+                    active_constraints   = constraints,
+                    callout_history_list = callouts,
+                )
             )
-            print(f"[CHAT] Got response: {str(response)[:80]}")
         except Exception as e:
-            import traceback
-            traceback.print_exc()
             response = f"❌ Error: {e}"
 
-        # Strip markdown formatting from response
-        import re as _re
+        # Strip markdown
         clean = _re.sub(r"#{1,3}\s*", "", response)
         clean = _re.sub(r"\*\*(.+?)\*\*", r"\1", clean)
         clean = _re.sub(r"\*(.+?)\*", r"\1", clean)
+
         chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": clean}])
 
         if not current_api:
-            api_history.set([
-                {"role": "user",      "content": question},
-                {"role": "assistant", "content": response},
-            ])
+            api_history.set([{"role": "user", "content": question},
+                             {"role": "assistant", "content": response}])
         else:
-            api_history.set(current_api + [
-                {"role": "user",      "content": question},
-                {"role": "assistant", "content": response},
-            ])
+            api_history.set(current_api + [{"role": "user", "content": question},
+                                           {"role": "assistant", "content": response}])
 
     @output
     @render.ui
