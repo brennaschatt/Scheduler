@@ -761,10 +761,22 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
             "No employees provided. Add at least one employee before generating a schedule."
         ]
 
-    # Pre-audit
+    # Pre-audit — catch obvious problems before running the solver
     audit_errors = []
+
+    # Check 0: employees with 0 max hours
+    zero_hrs = [e for e in employees if max_hours.get(e, 0) <= 0]
+    if zero_hrs:
+        audit_errors.append(
+            f"❌ These employees have 0 max hours — please set a weekly hour limit: "
+            f"{', '.join(zero_hrs)}"
+        )
+
+    # Check 1: enough qualified + available employees per shift role
     for _, row in shift_df.iterrows():
         sid = row["Shift_ID"]
+        day = row.get("Day", sid)
+        st  = row.get("Shift_Type", "")
         for col, emp_role in role_map.items():
             if col not in row or int(row[col]) == 0:
                 continue
@@ -778,8 +790,10 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
                 q = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
             if len(q) < needed:
                 audit_errors.append(
-                    f"INFEASIBLE: {sid} needs {needed}×{emp_role} "
-                    f"but only {len(q)} qualified & available.")
+                    f"❌ {day} {st}: Need {needed} {emp_role}(s) but only "
+                    f"{len(q)} qualified employee(s) are available. "
+                    f"{'Mark more employees available for this shift, or reduce the requirement.' if len(q) == 0 else 'Add more staff or reduce the requirement.'}"
+                )
     if audit_errors:
         return pd.DataFrame(), pd.DataFrame(), audit_errors
 
@@ -923,9 +937,11 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
                 else:
                     pool = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
                 if len(pool) < needed:
+                    day_st = sid.replace("_", " ")
                     diag.append(
-                        f"❌ {sid} needs {needed} × {emp_role} "
-                        f"but only {len(pool)} qualified employee(s) are available for that shift."
+                        f"❌ {day_st}: Needs {needed} {emp_role}(s) but only "
+                        f"{len(pool)} available. Mark more {emp_role}s available for this shift "
+                        f"or reduce the requirement."
                     )
 
         # Check 2: fairness floor impossible for a role group
@@ -960,9 +976,11 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 
         if not diag:
             diag = [
-                "❌ Solver could not find a valid schedule. "
-                "Try unchecking one or more constraints (Availability, Fairness, or No Clopening) "
-                "to identify which constraint is causing the conflict."
+                "❌ Could not build a valid schedule with current settings. Try:",
+                "  • Unchecking 'Fairness: Balance Shift Counts' (most common cause)",
+                "  • Unchecking 'No Clopening' if staff are limited",
+                "  • Reducing staffing requirements in Shift Requirements",
+                "  • Marking more employees as available",
             ]
         return pd.DataFrame(), pd.DataFrame(), diag
 
@@ -1497,21 +1515,21 @@ def make_employee_table(n, open_days=None, defaults=None):
     #   Row 1: Name | Role | Hrs | Mon (colspan=4) | Tue (colspan=4) | ...
     #   Row 2: (empty x3) | AM (colspan=2) | PM (colspan=2) | AM ...
     #   Row 3: (empty x3) | ✔ | ★ | ✔ | ★ | ...
-    th_base = ("padding:3px 5px; font-size:11px; font-weight:600; white-space:nowrap; "
+    th_base = ("padding:4px 6px; font-size:12px; font-weight:600; white-space:nowrap; "
                "border-bottom:2px solid #dee2e6; background:#fff;")
     th_day  = ("padding:3px 4px; font-size:11px; font-weight:600; text-align:center; "
                "border-bottom:1px solid #dee2e6; border-left:2px solid #dee2e6; background:#fff;")
     th_ampm = ("padding:2px 3px; font-size:10px; font-weight:600; text-align:center; "
                "border-bottom:1px solid #dee2e6; color:#555; background:#fff;")
-    th_sub  = ("padding:2px 2px; font-size:9px; text-align:center; width:18px; "
+    th_sub  = ("padding:2px 2px; font-size:9px; text-align:center; width:22px; "
                "border-bottom:2px solid #dee2e6; color:#888; background:#fff;")
     th_sub_left = th_sub + " border-left:2px solid #dee2e6;"
 
     empty = ui.tags.th("", style=th_base)
     row1 = [
-        ui.tags.th("Name", style=th_base + " width:94px;"),
-        ui.tags.th("Role", style=th_base + " width:102px;"),
-        ui.tags.th("Max Hrs/Week", style=th_base + " width:80px; text-align:center;"),
+        ui.tags.th("Name", style=th_base + " width:120px;"),
+        ui.tags.th("Role", style=th_base + " width:120px;"),
+        ui.tags.th("Max Hrs/Week", style=th_base + " width:54px; text-align:center;"),
     ]
     row2 = [empty, empty, empty]
     row3 = [empty, empty, empty]
@@ -1524,9 +1542,9 @@ def make_employee_table(n, open_days=None, defaults=None):
             row3.append(ui.tags.th("✔", style=th_sub_left))
             row3.append(ui.tags.th("★", style=th_sub))
 
-    td_base = "padding:2px 2px; vertical-align:middle; border-bottom:1px solid #f2f2f2;"
-    td_chk  = td_base + " text-align:center; width:18px; border-left:2px solid #dee2e6;"
-    td_sel  = td_base + " text-align:center; width:34px;"
+    td_base = "padding:5px 3px; vertical-align:middle; border-bottom:1px solid #f2f2f2;"
+    td_chk  = td_base + " text-align:center; width:22px; border-left:2px solid #dee2e6;"
+    td_sel  = td_base + " text-align:center; width:42px;"
 
     data_rows = []
     for i in range(n):
@@ -1535,17 +1553,17 @@ def make_employee_table(n, open_days=None, defaults=None):
             ui.tags.td(
                 ui.input_text(f"t_name_{i}", None,
                               value=d.get("name", ""),
-                              placeholder=f"Employee {i+1}", width="92px"),
+                              placeholder=f"Employee {i+1}", width="118px"),
                 style=td_base
             ),
             ui.tags.td(
                 ui.input_select(f"t_role_{i}", None, choices=ROLES,
-                                selected=d.get("role", ROLES[0]), width="100px"),
+                                selected=d.get("role", ROLES[0]), width="118px"),
                 style=td_base
             ),
             ui.tags.td(
                 ui.input_numeric(f"t_maxh_{i}", None,
-                                 value=d.get("max_hours", 40), min=1, max=80, width="38px"),
+                                 value=d.get("max_hours", 40), min=1, max=80, width="52px"),
                 style=td_base + " text-align:center;"
             ),
         ]
@@ -1554,25 +1572,31 @@ def make_employee_table(n, open_days=None, defaults=None):
                 sid = f"{day}_{st}"
                 is_avail = d.get(f"avail_{sid}", 1)
                 pref_val = d.get(f"pref_{sid}", "3")
+                pref_div_id = f"pref_wrap_{i}_{sid}"
                 tds.append(ui.tags.td(
                     ui.tags.input(
                         id=f"t_avail_{i}_{sid}",
                         name=f"t_avail_{i}_{sid}",
                         type="checkbox",
                         **{"checked": ""} if is_avail else {},
-                        style="width:15px; height:15px; cursor:pointer; margin:0;"
+                        style="width:17px; height:17px; cursor:pointer; margin:0;",
+                        onchange=f"document.getElementById('{pref_div_id}').style.display=this.checked?'block':'none';"
                     ),
                     style=td_chk
                 ))
                 tds.append(ui.tags.td(
-                    ui.tags.select(
-                        *[ui.tags.option(
-                            str(v), value=str(v),
-                            **{"selected": ""} if str(v) == str(pref_val) else {}
-                          ) for v in range(1, 6)],
-                        id=f"t_pref_{i}_{sid}",
-                        name=f"t_pref_{i}_{sid}",
-                        style="width:34px; font-size:11px; padding:1px 0; border:1px solid #ced4da; border-radius:3px;"
+                    ui.tags.div(
+                        ui.tags.select(
+                            *[ui.tags.option(
+                                str(v), value=str(v),
+                                **{"selected": ""} if str(v) == str(pref_val) else {}
+                              ) for v in range(1, 6)],
+                            id=f"t_pref_{i}_{sid}",
+                            name=f"t_pref_{i}_{sid}",
+                            style="width:40px; font-size:12px; padding:2px 0; border:1px solid #ced4da; border-radius:3px;"
+                        ),
+                        id=pref_div_id,
+                        style="display:block;" if is_avail else "display:none;"
                     ),
                     style=td_sel
                 ))
@@ -1767,7 +1791,7 @@ app_ui = ui.page_fluid(
                             ui.tags.tbody(
                                 ui.tags.tr(
                                     ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                                    ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                    ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
                                 ),
                                 ui.tags.tr(
                                     ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
@@ -2273,7 +2297,11 @@ def server(input, output, session):
             shift_reactive.set(shift)
             change_log.set("")
             callout_log.set(set())
+            callout_history.set([])
+            error_msgs.set([])
             is_default.set(False)
+            # Reset callout dropdowns to blank
+            ui.update_select("shift_sel", choices=[], selected=None)
             await run_optimization(emp, shift)
             ui.update_navs("main_tabs", selected="📅 Schedule & Results")
         except Exception as _e:
@@ -2418,8 +2446,8 @@ def server(input, output, session):
             if is_default.get():
                 return ui.HTML(
                     '<div class="alert-box alert-info">'
-                    '📋 <strong>Example schedule shown.</strong> This is a hand-built example rotation — '
-                    'not optimizer-generated, so preference satisfaction is lower than it could be. '
+                    '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
+                    'not optimizer-generated, so preference satisfaction (65.2%) is lower than it could be. '
                     'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
                     'and see the real result.</div>'
                 )
