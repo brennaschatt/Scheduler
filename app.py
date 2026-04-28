@@ -129,16 +129,18 @@ def parse_shift_hours(am_start, am_end, pm_start, pm_end):
     def _parse(t):
         try:
             t = t.strip().upper()
-            pat = _re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?")
+            # Accept AM/PM or just A/P (browsers truncate in narrow inputs)
+            pat = _re.compile(r"(\d{1,2})(?::(\d{2}))?\s*(AM|PM|A|P)?")
             m = pat.match(t)
             if not m:
                 return None
             h = int(m.group(1))
             mins = int(m.group(2) or 0)
-            period = m.group(3)
-            if period == "PM" and h != 12:
+            period = m.group(3) or ""
+            # Normalise A→AM, P→PM
+            if period in ("P", "PM") and h != 12:
                 h += 12
-            elif period == "AM" and h == 12:
+            elif period in ("A", "AM") and h == 12:
                 h = 0
             return h + mins / 60
         except Exception:
