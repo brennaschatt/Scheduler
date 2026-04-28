@@ -1031,17 +1031,16 @@ CALLOUT HISTORY THIS SESSION:
 LATEST CALLOUT CHANGE:
 {change_log_text if change_log_text else "None"}"""
 
-    # Build multi-turn message list
-    # First message always includes the full context + first question
-    messages = []
+    # Build multi-turn message list — always make a deep copy to avoid mutating the stored history
+    import copy as _copy
     if not conversation_history:
         messages = [{"role": "user", "content": context_block + f"\n\nQUESTION: {user_question}"}]
     else:
-        # Prepend context to the very first message in history
-        first_q = conversation_history[0]["content"]
-        if not first_q.startswith("Here is the current schedule"):
-            conversation_history[0]["content"] = context_block + "\n\n" + first_q
-        messages = conversation_history + [{"role": "user", "content": user_question}]
+        history_copy = _copy.deepcopy(conversation_history)
+        # Prepend context to first message only if not already there
+        if not history_copy[0]["content"].startswith("Here is the current schedule"):
+            history_copy[0]["content"] = context_block + "\n\n" + history_copy[0]["content"]
+        messages = history_copy + [{"role": "user", "content": user_question}]
 
     try:
         client = _anthropic_mod.Anthropic(api_key=api_key)
@@ -1122,6 +1121,18 @@ For "move": emp_a moves from shift_from to shift_to (shift_to must have an open 
 For "none": informational only — no automated change possible.
 Only use exact names and shift IDs from the lists above."""
 
+    def _emp_in_shift(df, shift_id, emp_name):
+        """Verify emp_name is actually assigned to shift_id in the schedule."""
+        row = df[df["Shift"] == shift_id]
+        if row.empty:
+            return False
+        for col in ["Manager(s)", "Lead Server(s)", "Server(s)", "Host(s)"]:
+            val = str(row.iloc[0].get(col, ""))
+            names = [n.strip().rstrip("*").strip() for n in val.split(",")]
+            if emp_name in names:
+                return True
+        return False
+
     try:
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
@@ -1130,12 +1141,39 @@ Only use exact names and shift IDs from the lists above."""
             messages=[{"role": "user", "content": prompt}]
         )
         raw = msg.content[0].text.strip()
-        # Extract JSON array
         m = re.search(r"\[.*\]", raw, re.DOTALL)
         if not m:
             return None
         suggestions = json.loads(m.group())
-        return suggestions if isinstance(suggestions, list) else None
+        if not isinstance(suggestions, list):
+            return None
+
+        # Validate each actionable suggestion against actual schedule data
+        validated = []
+        for s in suggestions:
+            action     = s.get("action", "none")
+            emp_a      = s.get("emp_a", "").strip()
+            shift_from = s.get("shift_from", "").strip()
+            emp_b      = s.get("emp_b", "").strip()
+            shift_to   = s.get("shift_to", "").strip()
+
+            if action in ("swap", "move"):
+                # Verify emp_a is actually on shift_from
+                if emp_a and shift_from and not _emp_in_shift(sched_df, shift_from, emp_a):
+                    # Hallucinated — downgrade to informational
+                    s = {**s, "action": "none", "emp_a": "", "shift_from": "",
+                         "emp_b": "", "shift_to": "",
+                         "suggestion": s.get("suggestion", "") +
+                                       " (Note: automated swap unavailable — verify manually.)"}
+                # Verify emp_b is actually on shift_to (for swaps)
+                elif action == "swap" and emp_b and shift_to and not _emp_in_shift(sched_df, shift_to, emp_b):
+                    s = {**s, "action": "none", "emp_a": "", "shift_from": "",
+                         "emp_b": "", "shift_to": "",
+                         "suggestion": s.get("suggestion", "") +
+                                       " (Note: automated swap unavailable — verify manually.)"}
+            validated.append(s)
+
+        return validated
     except Exception:
         return None
 
@@ -1143,37 +1181,58 @@ Only use exact names and shift IDs from the lists above."""
 def apply_insight_swap(sched_df, emp_a, shift_from, emp_b, shift_to, roles):
     """
     Swap emp_a (on shift_from) with emp_b (on shift_to).
-    Returns updated sched_df or None if swap is invalid.
+    Returns (updated_df, error_msg). error_msg is None on success.
     """
-    import copy
     df = sched_df.copy()
     role_cols = ["Manager(s)", "Lead Server(s)", "Server(s)", "Host(s)"]
 
+    def normalize(n):
+        return n.strip().rstrip("*").strip()
+
     def get_emp_role_col(df, shift, emp):
+        """Find which role column emp is in for the given shift."""
         row = df[df["Shift"] == shift]
-        if row.empty: return None
+        if row.empty:
+            return None, f"Shift '{shift}' not found in schedule"
         for col in role_cols:
             val = str(row.iloc[0].get(col, ""))
-            if emp in [n.strip().rstrip("*") for n in val.split(",")]:
-                return col
-        return None
+            if emp in [normalize(n) for n in val.split(",") if n.strip()]:
+                return col, None
+        return None, f"'{emp}' not found in any role column for shift {shift}"
 
     def replace_in_col(df, shift, col, old_emp, new_emp):
-        mask = df["Shift"] == shift
-        val  = str(df.loc[mask, col].values[0])
-        names = [n.strip() for n in val.split(",") if n.strip() != "—"]
-        new_names = [new_emp if n.rstrip("*").strip() == old_emp else n for n in names]
+        mask  = df["Shift"] == shift
+        val   = str(df.loc[mask, col].values[0])
+        names = [n.strip() for n in val.split(",") if n.strip() and n.strip() != "—"]
+        replaced = False
+        new_names = []
+        for n in names:
+            if normalize(n) == old_emp:
+                new_names.append(new_emp)
+                replaced = True
+            else:
+                new_names.append(normalize(n))
+        if not replaced:
+            return df, f"Could not find '{old_emp}' to replace in {shift}/{col}"
         df.loc[mask, col] = ", ".join(new_names) if new_names else "—"
-        return df
+        return df, None
 
-    col_a = get_emp_role_col(df, shift_from, emp_a)
-    col_b = get_emp_role_col(df, shift_to,   emp_b)
-    if not col_a or not col_b:
-        return None
+    col_a, err_a = get_emp_role_col(df, shift_from, emp_a)
+    if err_a:
+        return None, err_a
 
-    df = replace_in_col(df, shift_from, col_a, emp_a, emp_b)
-    df = replace_in_col(df, shift_to,   col_b, emp_b, emp_a)
-    return df
+    col_b, err_b = get_emp_role_col(df, shift_to, emp_b)
+    if err_b:
+        return None, err_b
+
+    df, err = replace_in_col(df, shift_from, col_a, emp_a, emp_b)
+    if err:
+        return None, err
+    df, err = replace_in_col(df, shift_to, col_b, emp_b, emp_a)
+    if err:
+        return None, err
+
+    return df, None
 
 
 DEFAULT_EMP_DATA = [
@@ -2316,6 +2375,11 @@ def server(input, output, session):
                     f'padding:4px 12px; font-size:12px; cursor:pointer; font-weight:500;">'
                     f'Apply Change</button>'
                 )
+            elif s.get("error"):
+                btn_html = (
+                    f'<span style="font-size:11px; color:#842029;">'
+                    f'⚠️ Could not apply: {s["error"]}</span>'
+                )
             else:
                 btn_html = '<span style="font-size:11px; color:#adb5bd;">Informational only</span>'
 
@@ -2369,13 +2433,15 @@ def server(input, output, session):
                 roles_map = {}
                 if summ is not None and not summ.empty and "Name" in summ.columns:
                     roles_map = dict(zip(summ["Name"], summ["Role"]))
-                new_sched = apply_insight_swap(sched, emp_a, shift_from, emp_b, shift_to, roles_map)
-                if new_sched is not None:
-                    sched_store.set(new_sched)
-                    # Mark this suggestion as applied
-                    updated = list(suggestions)
+                result, err_msg = apply_insight_swap(sched, emp_a, shift_from, emp_b, shift_to, roles_map)
+                updated = list(suggestions)
+                if result is not None:
+                    sched_store.set(result)
                     updated[idx] = {**s, "applied": True}
-                    ai_insights.set(updated)
+                else:
+                    # Show the error inline on the card so manager knows what failed
+                    updated[idx] = {**s, "error": err_msg or "Swap could not be applied — employees may not be on those shifts."}
+                ai_insights.set(updated)
             return _handler
         _make_apply_handler(_idx)
 
@@ -2499,23 +2565,26 @@ def server(input, output, session):
         # Convert display history to API format for multi-turn
         current_api = api_history.get()
 
-        response = ask_schedule_ai(
-            user_question        = question,
-            sched_df             = sched_store.get(),
-            summ_df              = summ_store.get(),
-            metrics              = metrics_store.get(),
-            change_log_text      = change_log.get(),
-            conversation_history = current_api.copy() if current_api else None,
-            active_constraints   = active_constraints,
-            callout_history_list = callout_history.get(),
-        )
+        try:
+            import copy as _copy
+            response = ask_schedule_ai(
+                user_question        = question,
+                sched_df             = sched_store.get(),
+                summ_df              = summ_store.get(),
+                metrics              = metrics_store.get(),
+                change_log_text      = change_log.get(),
+                conversation_history = _copy.deepcopy(current_api) if current_api else None,
+                active_constraints   = active_constraints,
+                callout_history_list = callout_history.get(),
+            )
+        except Exception as e:
+            response = f"❌ Error generating response: {e}"
 
         # Update display history
         chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": response}])
 
-        # Update API history for next turn
+        # Update API history for next turn (store clean versions without context block)
         if not current_api:
-            # First turn — context is embedded in the question by ask_schedule_ai
             api_history.set([
                 {"role": "user",      "content": question},
                 {"role": "assistant", "content": response},
