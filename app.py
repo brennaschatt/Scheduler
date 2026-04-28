@@ -1037,7 +1037,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 import os as _os
 ANTHROPIC_API_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL      = "claude-sonnet-4-6"   # used for insights (quality)
-ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5-20251001"  # used for chat (speed)
+ANTHROPIC_CHAT_MODEL = "claude-3-haiku-20240307"  # fast model for chat responses
 # ───────────────────────────────────────────────────────────────────────────
 
 def ask_schedule_ai(user_question, sched_df, summ_df, metrics,
@@ -1074,46 +1074,32 @@ def ask_schedule_ai(user_question, sched_df, summ_df, metrics,
         if off:
             constraint_text += f"\nDisabled: {', '.join(off)}"
 
-    system_prompt = """You are an expert restaurant scheduling assistant helping managers run their operation.
-
-ROLE HIERARCHY (important for replacement questions):
-- Manager can fill any role slot (Manager, Lead Server, Server, Host)
-- Lead Server can fill Lead Server, Server, or Host slots
-- Server can only fill Server slots
-- Host can only fill Host slots
-
-GUIDELINES:
-- Answer ONLY using the schedule data provided. Never invent employees or shifts.
-- For replacement questions, consider the role hierarchy above.
-- Be concise and direct — managers are busy.
-- Use bullet points for lists of employees or shifts.
-- When asked about fairness, reference the Hours Std Dev metric.
-- If asked who could cover a callout, check Available (Not Scheduled) column first.
-- Flag any schedule concerns proactively if they are relevant to the question."""
+    system_prompt = """Restaurant scheduling assistant. Answer concisely using only the data provided.
+Role hierarchy: Manager fills any slot. Lead Server fills Lead/Server/Host. Server=Server only. Host=Host only.
+For replacements, check Available (Not Scheduled) column first. Use bullet points for lists."""
 
     # Build the context block (sent once as the first user message)
-    # Build compact but complete schedule context
-    # Schedule: keep all role cols + Available, drop redundant Hours string (hours are in summary)
-    chat_sched_cols = [c for c in sched_df.columns if c != "Hours"]
-    sched_compact = sched_df[chat_sched_cols].to_string(index=False) if not sched_df.empty else "No schedule"
+    # Build minimal context — only what's needed to answer schedule questions
+    # Keep role columns + Available for "who is working / who is free" questions
+    key_cols = ["Shift", "Day", "Shift Type", "Manager(s)", "Lead Server(s)",
+                "Server(s)", "Host(s)", "Available (Not Scheduled)"]
+    sched_cols = [c for c in key_cols if c in sched_df.columns]
+    sched_compact = sched_df[sched_cols].to_string(index=False) if not sched_df.empty else "No schedule"
 
-    # Summary: drop internal score columns but keep Hours, Pref%, Assigned Shifts
+    # Summary: just Name, Role, Shifts, Hours, Pref% — enough for most questions
     summ_compact = ""
     if summ_df is not None and not summ_df.empty:
-        summ_cols = [c for c in summ_df.columns
-                     if c not in ("Pref_Score", "Max_Pref_Score")]
+        summ_cols = [c for c in ["Name", "Role", "Shifts", "Hours", "AM Shifts", "PM Shifts", "Pref %", "Assigned Shifts"]
+                     if c in summ_df.columns]
         summ_compact = summ_df[summ_cols].to_string(index=False)
 
-    context_block = f"""Current schedule data:
-
-SCHEDULE (who is working each shift + who is available but not scheduled):
+    context_block = f"""SCHEDULE:
 {sched_compact}
 
-EMPLOYEE SUMMARY (hours, shifts, preference scores per employee):
-{summ_compact or "Not available"}
+EMPLOYEE SUMMARY:
+{summ_compact or "N/A"}
 
 METRICS: {metrics_text}
-CONSTRAINTS: {constraint_text}
 CALLOUTS: {callout_text}
 LAST CHANGE: {change_log_text or "None"}"""
 
@@ -1132,7 +1118,7 @@ LAST CHANGE: {change_log_text or "None"}"""
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_CHAT_MODEL,
-            max_tokens=400,
+            max_tokens=250,
             system=system_prompt,
             messages=messages
         )
@@ -1835,6 +1821,14 @@ app_ui = ui.page_fluid(
                 ),
                 # Messages area
                 ui.tags.div(
+                    ui.HTML(
+                        '<div style="font-size:11px; color:#6c757d; '
+                        'background:#fff3cd; border:1px solid #ffc107; border-radius:5px; '
+                        'padding:6px 9px; margin-bottom:8px;">'
+                        '⏱️ <strong>Responses may take up to a minute</strong> — '
+                        'the AI reads the full schedule before answering.'
+                        '</div>'
+                    ),
                     ui.output_ui("chat_history"),
                     id="chat_messages_area",
                     style="padding:12px; overflow-y:auto; height:340px; font-size:13px; background:#f8f9fa;"
@@ -2637,8 +2631,11 @@ def server(input, output, session):
         if not question:
             return
 
-        # Show user message immediately
-        display = chat_messages.get() + [{"role": "user", "text": question}]
+        # Show user message + thinking indicator immediately
+        display = chat_messages.get() + [
+            {"role": "user", "text": question},
+            {"role": "assistant", "text": "⏳ Thinking..."},
+        ]
         chat_messages.set(display)
         ui.update_text("chat_input", value="")
 
@@ -2668,8 +2665,11 @@ def server(input, output, session):
         except Exception as e:
             response = f"❌ Error generating response: {e}"
 
-        # Update display history
-        chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": response}])
+        # Replace thinking indicator with real response
+        msgs = chat_messages.get()
+        if msgs and msgs[-1].get("text") == "⏳ Thinking...":
+            msgs = msgs[:-1]  # remove thinking indicator
+        chat_messages.set(msgs + [{"role": "assistant", "text": response}])
 
         # Update API history for next turn (store clean versions without context block)
         if not current_api:
