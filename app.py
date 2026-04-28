@@ -1527,8 +1527,8 @@ def make_employee_table(n, open_days=None, defaults=None):
 
     empty = ui.tags.th("", style=th_base)
     row1 = [
-        ui.tags.th("Name", style=th_base + " width:120px;"),
-        ui.tags.th("Role", style=th_base + " width:120px;"),
+        ui.tags.th("Name", style=th_base + " width:132px;"),
+        ui.tags.th("Role", style=th_base + " width:132px;"),
         ui.tags.th("Max Hrs/Week", style=th_base + " width:54px; text-align:center;"),
     ]
     row2 = [empty, empty, empty]
@@ -1542,7 +1542,7 @@ def make_employee_table(n, open_days=None, defaults=None):
             row3.append(ui.tags.th("✔", style=th_sub_left))
             row3.append(ui.tags.th("★", style=th_sub))
 
-    td_base = "padding:5px 3px; vertical-align:middle; border-bottom:1px solid #f2f2f2;"
+    td_base = "padding:8px 4px; vertical-align:middle; border-bottom:1px solid #e8e8e8;"
     td_chk  = td_base + " text-align:center; width:22px; border-left:2px solid #dee2e6;"
     td_sel  = td_base + " text-align:center; width:42px;"
 
@@ -1553,17 +1553,17 @@ def make_employee_table(n, open_days=None, defaults=None):
             ui.tags.td(
                 ui.input_text(f"t_name_{i}", None,
                               value=d.get("name", ""),
-                              placeholder=f"Employee {i+1}", width="118px"),
+                              placeholder=f"Employee {i+1}", width="130px"),
                 style=td_base
             ),
             ui.tags.td(
                 ui.input_select(f"t_role_{i}", None, choices=ROLES,
-                                selected=d.get("role", ROLES[0]), width="118px"),
+                                selected=d.get("role", ROLES[0]), width="130px"),
                 style=td_base
             ),
             ui.tags.td(
                 ui.input_numeric(f"t_maxh_{i}", None,
-                                 value=d.get("max_hours", 40), min=1, max=80, width="52px"),
+                                 value=d.get("max_hours", 40), min=1, max=80, width="58px"),
                 style=td_base + " text-align:center;"
             ),
         ]
@@ -1579,7 +1579,7 @@ def make_employee_table(n, open_days=None, defaults=None):
                         name=f"t_avail_{i}_{sid}",
                         type="checkbox",
                         **{"checked": ""} if is_avail else {},
-                        style="width:17px; height:17px; cursor:pointer; margin:0;",
+                        style="width:18px; height:18px; cursor:pointer; margin:0;",
                         onchange=f"document.getElementById('{pref_div_id}').style.display=this.checked?'block':'none';"
                     ),
                     style=td_chk
@@ -1593,14 +1593,15 @@ def make_employee_table(n, open_days=None, defaults=None):
                               ) for v in range(1, 6)],
                             id=f"t_pref_{i}_{sid}",
                             name=f"t_pref_{i}_{sid}",
-                            style="width:40px; font-size:12px; padding:2px 0; border:1px solid #ced4da; border-radius:3px;"
+                            style="width:44px; font-size:13px; padding:2px 1px; border:1px solid #ced4da; border-radius:3px;"
                         ),
                         id=pref_div_id,
                         style="display:block;" if is_avail else "display:none;"
                     ),
                     style=td_sel
                 ))
-        data_rows.append(ui.tags.tr(*tds))
+        row_bg = "background:#f9f9f9;" if i % 2 == 1 else "background:#ffffff;"
+        data_rows.append(ui.tags.tr(*tds, style=row_bg))
 
     return ui.div(
         ui.tags.table(
