@@ -1065,13 +1065,31 @@ def generate_schedule_insights(sched_df, summ_df, metrics):
 
     metrics_text = "\n".join(f"  {k}: {v}" for k, v in metrics.items()) if metrics else ""
 
-    prompt = f"""You are a restaurant scheduling expert. Review this schedule and give 2-3 brief, specific insights a manager should know. Focus on: fairness concerns, coverage risks, employees with heavy/light loads, or anything unusual. Be concise — one sentence per insight, use bullet points.
+    # Only send the staffing columns — exclude "Available (Not Scheduled)" which
+    # Claude misreads as empty shifts. Role columns ARE the assigned staff.
+    staffing_cols = [c for c in sched_df.columns if c != "Available (Not Scheduled)"]
+    sched_clean = sched_df[staffing_cols].to_string(index=False)
 
-WEEKLY SCHEDULE:
-{sched_df.to_string(index=False)}
+    # Employee summary without internal score columns
+    summ_cols = [c for c in (summ_df.columns if summ_df is not None else [])
+                 if c not in ("Pref_Score", "Max_Pref_Score", "Assigned Shifts")]
+    summ_clean = summ_df[summ_cols].to_string(index=False) if summ_df is not None and not summ_df.empty else ""
+
+    prompt = f"""You are a restaurant scheduling expert. Review this schedule and give 2-3 brief, specific insights a manager should know.
+
+IMPORTANT COLUMN GUIDE:
+- Manager(s), Lead Server(s), Server(s), Host(s) = employees ASSIGNED to that shift
+- These columns show who IS working — every shift is fully staffed
+- Focus on: hours fairness, preference satisfaction, heavy/light workloads, employees with low Pref %
+
+Do NOT flag coverage gaps — every shift is confirmed fully staffed.
+Be concise — one sentence per insight. No markdown headers. Use plain bullet points starting with "-".
+
+WEEKLY SCHEDULE (assigned staff per shift):
+{sched_clean}
 
 EMPLOYEE SUMMARY:
-{summ_df.to_string(index=False) if summ_df is not None and not summ_df.empty else ""}
+{summ_clean}
 
 METRICS:
 {metrics_text}"""
@@ -1083,7 +1101,13 @@ METRICS:
             max_tokens=300,
             messages=[{"role": "user", "content": prompt}]
         )
-        return msg.content[0].text
+        # Strip markdown formatting (##, **, etc.)
+        import re
+        text = msg.content[0].text
+        text = re.sub(r"#{1,3}\s*", "", text)          # remove ## headers
+        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text) # remove **bold**
+        text = re.sub(r"\*(.+?)\*",   r"\1", text)    # remove *italic*
+        return text.strip()
     except Exception:
         return None
 
@@ -1590,6 +1614,11 @@ app_ui = ui.page_fluid(
                     id="chat_messages_area",
                     style="padding:12px; overflow-y:auto; height:340px; font-size:13px; background:#f8f9fa;"
                 ),
+                # Suggested questions pills
+                ui.tags.div(
+                    ui.output_ui("chat_suggestions"),
+                    style="padding:6px 12px 2px; background:#fff; border-top:1px solid #f0f0f0;"
+                ),
                 # Input area
                 ui.tags.div(
                     ui.input_text("chat_input", None,
@@ -1598,10 +1627,10 @@ app_ui = ui.page_fluid(
                     ui.tags.div(
                         ui.input_action_button("chat_send", "Ask", class_="btn-primary btn-sm"),
                         ui.input_action_button("chat_clear", "Clear", class_="btn-outline-secondary btn-sm",
-                                               style="margin-left:4px; display:none;"),
+                                               style="margin-left:4px;"),
                         style="margin-left:6px; display:flex; white-space:nowrap;"
                     ),
-                    style="display:flex; align-items:center; padding:10px 12px; "
+                    style="display:flex; align-items:center; padding:8px 12px 10px; "
                           "background:#fff; border-top:1px solid #dee2e6; border-radius:0 0 12px 12px;"
                 ),
                 id="chat_float_panel",
@@ -2306,36 +2335,36 @@ def server(input, output, session):
                         f'<span style="white-space:pre-wrap;">{m["text"]}</span></div>'
                     )
 
-        # Suggested questions (context-aware)
+        return ui.HTML("".join(parts))
+
+    @output
+    @render.ui
+    def chat_suggestions():
         sched = sched_store.get()
         hist  = callout_history.get()
         suggestions = [
             "Who is working the most hours this week?",
-            "Which shifts are hardest to cover?",
             "Is the schedule fair across all employees?",
-            "Who has the highest preference satisfaction?",
+            "Which shifts are hardest to cover?",
+            "Who has the lowest preference satisfaction?",
+            "Are there any schedule concerns I should know about?",
         ]
         if hist:
             absent = hist[-1]["absent"]
             shift  = hist[-1]["shift"]
             suggestions.insert(0, f"Who could replace {absent} on {shift}?")
-        if not sched.empty:
-            suggestions.insert(0, "Are there any schedule concerns I should know about?")
 
-        sugg_html = "".join(
-            f'<button onclick="Shiny.setInputValue(\'chat_suggestion\', \'{s}\', {{priority: \'event\'}})" '
-            f'style="margin:3px; padding:4px 10px; font-size:12px; border:1px solid #0d6efd; '
-            f'border-radius:12px; background:#fff; color:#0d6efd; cursor:pointer; '
-            f'white-space:nowrap;">{s}</button>'
+        pills = "".join(
+            f'<button onclick="Shiny.setInputValue(\'chat_suggestion\', \'{s}\', {{priority: \'event\'}}); return false;" '
+            f'style="margin:2px 3px; padding:3px 9px; font-size:11px; '
+            f'border:1px solid #0d6efd; border-radius:12px; '
+            f'background:#fff; color:#0d6efd; cursor:pointer; white-space:nowrap;">{s}</button>'
             for s in suggestions[:5]
         )
-        parts.append(
-            f'<div style="margin-top:10px; border-top:1px solid #f0f0f0; padding-top:8px;">'
-            f'<div style="font-size:11px; color:#adb5bd; margin-bottom:4px;">Suggested questions:</div>'
-            f'{sugg_html}</div>'
+        return ui.HTML(
+            f'<div style="font-size:10px; color:#adb5bd; margin-bottom:3px;">Suggested:</div>'
+            f'<div style="display:flex; flex-wrap:wrap;">{pills}</div>'
         )
-
-        return ui.HTML("".join(parts))
 
     # Handle suggested question clicks
     @reactive.effect
