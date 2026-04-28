@@ -211,53 +211,76 @@ def smart_read(file_info):
 # ─────────────────────────────────────────────
 
 def build_emp_df_from_inputs(input, n_emp, open_days):
+    """
+    Build employee DataFrame from Shiny inputs, falling back to DEFAULT_EMP_DATA
+    when inputs are not registered (e.g. tab not yet rendered).
+    Always produces valid data so Generate Schedule works from any tab.
+    """
     active_shifts = [f"{d}_{s}" for d in open_days for s in SHIFT_TYPES]
 
     def _get(key, default=None):
-        """Safely read a Shiny input, returning default if not registered yet."""
         try:
-            return input[key]()
+            val = input[key]()
+            # Return default if Shiny returns None/empty for unrendered inputs
+            return val if val is not None else default
         except Exception:
             return default
 
     rows = []
     for i in range(n_emp):
-        # Use DEFAULT_EMP_DATA as fallback if input not yet registered
-        default_emp = DEFAULT_EMP_DATA[i] if i < len(DEFAULT_EMP_DATA) else {}
+        # Always start with DEFAULT_EMP_DATA as the base
+        base = DEFAULT_EMP_DATA[i] if i < len(DEFAULT_EMP_DATA) else {}
 
-        name = _get(f"t_name_{i}", default_emp.get("name", ""))
+        # Try to read from live inputs; fall back to base data if not available
+        name    = _get(f"t_name_{i}",  base.get("name", f"Employee {i+1}"))
+        role    = _get(f"t_role_{i}",  base.get("role", ROLES[0]))
+        max_hrs = _get(f"t_maxh_{i}",  base.get("max_hours", 40))
+
         if not name or not str(name).strip():
-            continue
-        role     = _get(f"t_role_{i}", default_emp.get("role", ROLES[0]))
-        max_hrs  = _get(f"t_maxh_{i}", default_emp.get("max_hours", 40))
+            # No name from input — use base name or skip if truly empty
+            name = base.get("name", "")
+            if not name:
+                continue
+
         row = {
             "Name":      str(name).strip(),
-            "Role":      role or ROLES[0],
-            "Max_Hours": int(max_hrs or 40),
+            "Role":      str(role or base.get("role", ROLES[0])),
+            "Max_Hours": int(max_hrs or base.get("max_hours", 40)),
         }
         for sid in active_shifts:
-            raw_avail = _get(f"t_avail_{i}_{sid}", default_emp.get(f"avail_{sid}", 1))
-            raw_pref  = _get(f"t_pref_{i}_{sid}", default_emp.get(f"pref_{sid}", "3"))
-            row[f"{sid}_Avail"] = 1 if raw_avail else 0
-            row[f"{sid}_Pref"]  = int(raw_pref or 3)
+            avail = _get(f"t_avail_{i}_{sid}", base.get(f"avail_{sid}", 1))
+            pref  = _get(f"t_pref_{i}_{sid}",  base.get(f"pref_{sid}",  "3"))
+            row[f"{sid}_Avail"] = 1 if avail else 0
+            try:
+                row[f"{sid}_Pref"] = int(pref or 3)
+            except (ValueError, TypeError):
+                row[f"{sid}_Pref"] = 3
         rows.append(row)
     return pd.DataFrame(rows) if rows else None
 
 
 def build_shift_df_from_inputs(input, open_days):
+    """Build shift DataFrame from inputs, always falling back to defaults."""
     def _get(key, default=None):
-        try: return input[key]()
-        except Exception: return default
+        try:
+            val = input[key]()
+            return val if val is not None else default
+        except Exception:
+            return default
+
+    def _int(val, default):
+        try: return int(val or default)
+        except (ValueError, TypeError): return default
 
     rows = []
     for day in open_days:
         for st in SHIFT_TYPES:
             sid = f"{day}_{st}"
             default_start, default_end = _DEFAULT_TIMES.get(st, ("8:00 AM", "8:00 PM"))
-            mgr     = int(_get(f"s_mgr_{sid}",  1) or 1)
-            lead    = int(_get(f"s_lead_{sid}", 1) or 1)
-            srv     = int(_get(f"s_srv_{sid}",  3) or 3)
-            host    = int(_get(f"s_host_{sid}", 1) or 1)
+            mgr     = _int(_get(f"s_mgr_{sid}",  1), 1)
+            lead    = _int(_get(f"s_lead_{sid}", 1), 1)
+            srv     = _int(_get(f"s_srv_{sid}",  3), 3)
+            host    = _int(_get(f"s_host_{sid}", 1), 1)
             t_start = _get(f"t_start_{sid}", default_start) or default_start
             t_end   = _get(f"t_end_{sid}",   default_end)   or default_end
             rows.append({
