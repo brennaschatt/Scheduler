@@ -1600,7 +1600,7 @@ def make_employee_table(n, open_days=None, defaults=None):
                     ),
                     style=td_sel
                 ))
-        row_bg = "background:#f1f5f9;" if i % 2 == 1 else "background:#ffffff;"
+        row_bg = "background:#e2e8f0;" if i % 2 == 1 else "background:#ffffff;"
         data_rows.append(ui.tags.tr(*tds, style=row_bg))
 
     return ui.div(
