@@ -291,7 +291,7 @@ def _parse_worker_names(raw):
     if not raw or isinstance(raw, float):
         return names
     for w in str(raw).split(","):
-        w = w.strip()
+        w = w.strip().rstrip("*").strip()  # strip covering marker
         if "(" in w:
             w = w[:w.rfind("(")].strip()
         if w:
@@ -299,7 +299,20 @@ def _parse_worker_names(raw):
     return names
 
 
-def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type):
+# ── Fast employee data lookup helper ─────────────────────────────────────────
+def _emp_val(emp_df_index, name, col, default=0):
+    """O(1) lookup into a pre-indexed emp_df. Returns default if col missing."""
+    try:
+        return emp_df_index.at[name, col]
+    except (KeyError, ValueError):
+        return default
+
+def _make_emp_index(emp_df):
+    """Index emp_df by Name for O(1) column access."""
+    return emp_df.set_index("Name")
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type, shift_hours_dict=None):
     employees = emp_df["Name"].tolist()
     shift_ids = shift_df["Shift_ID"].tolist()
     amap = {}
@@ -321,7 +334,10 @@ def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type):
     for e in employees:
         assigned = [s for s in shift_ids if e in amap.get(s, set())]
         n        = len(assigned)
-        hours    = n * HOURS_PER_SHIFT
+        if shift_hours_dict:
+            hours = sum(shift_hours_dict.get(s, HOURS_PER_SHIFT) for s in assigned)
+        else:
+            hours = n * HOURS_PER_SHIFT
         pref_score = 0
         for s in assigned:
             pc = f"{s}_Pref"
@@ -351,7 +367,24 @@ def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type):
 
 
 def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
-                    affected_shift_id, constraints, blocked_pairs=None):
+                    affected_shift_id, constraints, blocked_pairs=None,
+                    shift_hours_map=None):
+    if shift_hours_map is None:
+        shift_hours_map = {}
+
+    def _shift_hrs(sid):
+        return shift_hours_map.get(sid, HOURS_PER_SHIFT)
+
+    # Pre-index for O(1) lookups
+    emp_ix = _make_emp_index(emp_df)
+
+    def _avail(e, col):
+        try: return int(emp_ix.at[e, col])
+        except: return 1
+
+    def _pref(e, col):
+        try: return int(emp_ix.at[e, col])
+        except: return 3
     if blocked_pairs is None:
         blocked_pairs = set()
 
@@ -404,7 +437,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         if sid != affected_shift_id:
             for e in wset:
                 if e in hours_elsewhere:
-                    hours_elsewhere[e] += HOURS_PER_SHIFT
+                    hours_elsewhere[e] += _shift_hrs(s)
 
     affected_day  = shift_day.get(affected_shift_id, "")
     affected_type = shift_type.get(affected_shift_id, "")
@@ -441,13 +474,10 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
             continue
         if constraints.get("no_clopening", True) and e in clopening_blocked:
             continue
-        if constraints.get("availability", True) and avail_col in emp_df.columns:
-            val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                errors="coerce").fillna(0).values[0]
-            if int(val) == 0:
-                continue
+        if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+            continue
         if constraints.get("max_hours", True):
-            if hours_elsewhere[e] + HOURS_PER_SHIFT > max_hours[e]:
+            if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
                 continue
         candidates.append(e)
 
@@ -467,14 +497,11 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
-            if constraints.get("availability", True) and avail_col in emp_df.columns:
-                val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                    errors="coerce").fillna(0).values[0]
-                if int(val) == 0:
-                    reasons.append("marked unavailable")
+            if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+                reasons.append("marked unavailable")
             if constraints.get("max_hours", True):
-                if hours_elsewhere[e] + HOURS_PER_SHIFT > max_hours[e]:
-                    overage = (hours_elsewhere[e] + HOURS_PER_SHIFT) - max_hours[e]
+                if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
+                    overage = round((hours_elsewhere[e] + _shift_hrs(affected_shift_id)) - max_hours[e], 1)
                     reasons.append(f"overtime (+{overage:.0f}h over cap)")
             if reasons:
                 overtime_options.append((e, roles.get(e, ""), reasons))
@@ -514,8 +541,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         pc = f"{affected_shift_id}_Pref"
         pref = 1
         if pc in emp_df.columns:
-            pref = int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, pc],
-                                     errors="coerce").fillna(1).values[0])
+            pref = _pref(e, pc)
         fills = any(r in ROLE_HIERARCHY.get(roles.get(e,""), []) for r in role_needs)
         return (0 if fills else 1, -pref)
 
@@ -558,14 +584,11 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
-            if constraints.get("availability", True) and avail_col in emp_df.columns:
-                val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                    errors="coerce").fillna(0).values[0]
-                if int(val) == 0:
-                    reasons.append("marked unavailable")
+            if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+                reasons.append("marked unavailable")
             if constraints.get("max_hours", True):
-                if hours_elsewhere[e] + HOURS_PER_SHIFT > max_hours[e]:
-                    overage = (hours_elsewhere[e] + HOURS_PER_SHIFT) - max_hours[e]
+                if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
+                    overage = round((hours_elsewhere[e] + _shift_hrs(affected_shift_id)) - max_hours[e], 1)
                     reasons.append(f"overtime (+{overage:.0f}h over cap)")
             if reasons:
                 overtime_options.append((e, roles.get(e,""), reasons))
@@ -612,8 +635,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
             still_avail = [e for e in employees
                            if e not in selected_names
                            and e not in blocked_for_shift
-                           and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                                 errors="coerce").fillna(0).values[0]) == 1]
+                           and _avail(e, avail_col) == 1]
         else:
             still_avail = [e for e in employees
                            if e not in selected_names
@@ -649,6 +671,18 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
     role_map   = {"Manager":"Manager","Lead_Server":"Lead Server","Server":"Server","Host":"Host"}
     all_roles  = list(role_map.values())
 
+    # Precompute availability and preference dicts for O(1) lookup
+    # instead of O(n) DataFrame.loc scans inside loops
+    emp_index = emp_df.set_index("Name")
+    avail_dict = {}   # {(emp, shift_id): 0|1}
+    pref_dict  = {}   # {(emp, shift_id): int}
+    for e in employees:
+        for sid in shift_ids:
+            acol = f"{sid}_Avail"
+            pcol = f"{sid}_Pref"
+            avail_dict[(e, sid)] = int(emp_index.loc[e, acol]) if acol in emp_index.columns else 1
+            pref_dict[(e, sid)]  = int(emp_index.loc[e, pcol]) if pcol in emp_index.columns else 3
+
     if len(employees) == 0:
         return pd.DataFrame(), pd.DataFrame(), [
             "No employees provided. Add at least one employee before generating a schedule."
@@ -666,8 +700,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
             if avail_col in emp_df.columns:
                 q = [e for e in employees
                      if emp_role in ROLE_HIERARCHY.get(roles[e], [])
-                     and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                           errors="coerce").fillna(0).values[0]) == 1]
+                     and _avail(e, avail_col) == 1]
             else:
                 q = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
             if len(q) < needed:
@@ -710,11 +743,8 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
         for e in employees:
             for s in shift_ids:
                 ac = f"{s}_Avail"
-                if ac in emp_df.columns:
-                    val = pd.to_numeric(emp_df.loc[emp_df["Name"]==e, ac],
-                                        errors="coerce").fillna(0).values[0]
-                    if int(val) == 0:
-                        model.Add(x[e, s] == 0)
+                if avail_dict.get((e, s), 1) == 0:
+                    model.Add(x[e, s] == 0)
 
     if constraints.get("max_hours", True):
         # Per-shift-ID hours: shift_hours is keyed by Shift_ID (e.g. "Mon_AM")
@@ -778,11 +808,8 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
         model.AddMaxEquality(over_var, [diff_var, model.NewConstant(0)])
         fairness_terms.append(over_var)
         for s in shift_ids:
-            pc = f"{s}_Pref"
-            if pc in emp_df.columns:
-                w = int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, pc],
-                                      errors="coerce").fillna(1).values[0])
-                pref_terms.append(x[e, s] * w * 10)
+            w = pref_dict.get((e, s), 3)
+            pref_terms.append(x[e, s] * w * 10)
 
     objective = pref_terms + [-5 * t for t in fairness_terms]
     if objective:
@@ -790,7 +817,18 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 
     solver = cp_model.CpSolver()
     solver.parameters.max_time_in_seconds = 30.0
-    status = solver.Solve(model)
+    try:
+        status = solver.Solve(model)
+    except Exception as _solve_err:
+        return pd.DataFrame(), pd.DataFrame(), [
+            f"❌ Solver crashed unexpectedly: {_solve_err}. "
+            f"Try reducing the number of shifts or employees."
+        ]
+
+    if status == cp_model.UNKNOWN:
+        return pd.DataFrame(), pd.DataFrame(), [
+            "❌ Solver timed out (30s limit). Try unchecking Fairness or reducing open days."
+        ]
 
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         # Run targeted diagnosis to give the manager a specific, actionable error
@@ -808,8 +846,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
                 if constraints.get("availability", True) and avail_col in emp_df.columns:
                     pool = [e for e in employees
                             if emp_role in ROLE_HIERARCHY.get(roles[e], [])
-                            and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                                  errors="coerce").fillna(0).values[0]) == 1]
+                            and _avail(e, avail_col) == 1]
                 else:
                     pool = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
                 if len(pool) < needed:
@@ -884,8 +921,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
             not_scheduled = [
                 e for e in employees
                 if e not in assigned_names
-                and int(pd.to_numeric(emp_df.loc[emp_df["Name"]==e, avail_col],
-                                      errors="coerce").fillna(0).values[0]) == 1
+                and _avail(e, avail_col) == 1
             ]
         else:
             not_scheduled = [e for e in employees if e not in assigned_names]
@@ -920,14 +956,12 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
         for s in assigned:
             pc = f"{s}_Pref"
             if pc in emp_df.columns:
-                pref_score += int(pd.to_numeric(
-                    emp_df.loc[emp_df["Name"]==e, pc], errors="coerce").fillna(1).values[0])
+                pref_score += _pref(e, pc)
         all_prefs = []
         for s in shift_ids:
             pc = f"{s}_Pref"
             if pc in emp_df.columns:
-                all_prefs.append(int(pd.to_numeric(
-                    emp_df.loc[emp_df["Name"]==e, pc], errors="coerce").fillna(1).values[0]))
+                all_prefs.append(_pref(e, pc))
         max_pref = sum(sorted(all_prefs, reverse=True)[:n]) if n else 0
         summ_rows.append({
             "Name":            e,
@@ -956,7 +990,8 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
 #   export ANTHROPIC_API_KEY="sk-ant-..."
 import os as _os
 ANTHROPIC_API_KEY = _os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL   = "claude-sonnet-4-6"
+ANTHROPIC_MODEL      = "claude-sonnet-4-6"   # used for insights (quality)
+ANTHROPIC_CHAT_MODEL = "claude-haiku-4-5-20251001"  # used for chat (speed)
 # ───────────────────────────────────────────────────────────────────────────
 
 def ask_schedule_ai(user_question, sched_df, summ_df, metrics,
@@ -1011,25 +1046,30 @@ GUIDELINES:
 - Flag any schedule concerns proactively if they are relevant to the question."""
 
     # Build the context block (sent once as the first user message)
-    context_block = f"""Here is the current schedule data:
+    # Build compact but complete schedule context
+    # Schedule: keep all role cols + Available, drop redundant Hours string (hours are in summary)
+    chat_sched_cols = [c for c in sched_df.columns if c != "Hours"]
+    sched_compact = sched_df[chat_sched_cols].to_string(index=False) if not sched_df.empty else "No schedule"
 
-WEEKLY SCHEDULE:
-{sched_df.to_string(index=False)}
+    # Summary: drop internal score columns but keep Hours, Pref%, Assigned Shifts
+    summ_compact = ""
+    if summ_df is not None and not summ_df.empty:
+        summ_cols = [c for c in summ_df.columns
+                     if c not in ("Pref_Score", "Max_Pref_Score")]
+        summ_compact = summ_df[summ_cols].to_string(index=False)
 
-EMPLOYEE SUMMARY:
-{summ_df.to_string(index=False) if summ_df is not None and not summ_df.empty else "Not available"}
+    context_block = f"""Current schedule data:
 
-SCHEDULE METRICS:
-{metrics_text}
+SCHEDULE (who is working each shift + who is available but not scheduled):
+{sched_compact}
 
-ACTIVE CONSTRAINTS:
-{constraint_text}
+EMPLOYEE SUMMARY (hours, shifts, preference scores per employee):
+{summ_compact or "Not available"}
 
-CALLOUT HISTORY THIS SESSION:
-{callout_text}
-
-LATEST CALLOUT CHANGE:
-{change_log_text if change_log_text else "None"}"""
+METRICS: {metrics_text}
+CONSTRAINTS: {constraint_text}
+CALLOUTS: {callout_text}
+LAST CHANGE: {change_log_text or "None"}"""
 
     # Build multi-turn message list — always make a deep copy to avoid mutating the stored history
     import copy as _copy
@@ -1045,8 +1085,8 @@ LATEST CALLOUT CHANGE:
     try:
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
-            model=ANTHROPIC_MODEL,
-            max_tokens=600,
+            model=ANTHROPIC_CHAT_MODEL,
+            max_tokens=400,
             system=system_prompt,
             messages=messages
         )
@@ -1174,7 +1214,8 @@ Only use exact names and shift IDs from the lists above."""
             validated.append(s)
 
         return validated
-    except Exception:
+    except Exception as _e:
+        print(f"Insights error: {_e}")
         return None
 
 
@@ -1666,7 +1707,7 @@ app_ui = ui.page_fluid(
                             ui.tags.tbody(
                                 ui.tags.tr(
                                     ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                                    ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                    ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
                                 ),
                                 ui.tags.tr(
                                     ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
@@ -1838,8 +1879,24 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
 
-    # Switch to Schedule & Results tab on first load so user sees the example schedule
-    _init_done = reactive.value(False)
+    # ── All reactive state declared first so every handler can reference any of them ──
+    _init_done      = reactive.value(False)
+    sched_store     = reactive.value(DEFAULT_SCHED_DF.copy())
+    summ_store      = reactive.value(DEFAULT_SUMM_DF.copy())
+    emp_reactive    = reactive.value(None)
+    shift_reactive  = reactive.value(None)
+    error_msgs      = reactive.value([])
+    change_log      = reactive.value("")
+    metrics_store   = reactive.value(DEFAULT_METRICS.copy())
+    callout_log     = reactive.value(set())
+    shift_hours     = reactive.value({"AM": 6.0, "PM": 6.0})
+    n_emp_rows      = reactive.value(len(DEFAULT_EMP_DATA))
+    is_default      = reactive.value(True)
+    callout_history = reactive.value([])
+    chat_messages   = reactive.value([])
+    api_history     = reactive.value([])
+    ai_insights     = reactive.value([])
+    # ─────────────────────────────────────────────────────────────────────────
 
     @reactive.effect
     def _init_tab():
@@ -1863,19 +1920,7 @@ def server(input, output, session):
         ai_insights.set([])
         n_emp_rows.set(len(DEFAULT_EMP_DATA))
 
-    # Pre-populate with example schedule so the app looks live on first load
-    sched_store    = reactive.value(DEFAULT_SCHED_DF.copy())
-    summ_store     = reactive.value(DEFAULT_SUMM_DF.copy())
-    emp_reactive   = reactive.value(None)
-    shift_reactive = reactive.value(None)
-    error_msgs     = reactive.value([])
-    change_log     = reactive.value("")
-    metrics_store  = reactive.value(DEFAULT_METRICS.copy())
-    callout_log    = reactive.value(set())
-    shift_hours    = reactive.value({"AM": 6.0, "PM": 6.0})
-    n_emp_rows     = reactive.value(len(DEFAULT_EMP_DATA))
-    is_default     = reactive.value(True)
-    callout_history = reactive.value([])
+
 
     # ── Employee table — entire table from one output_ui ─────────────
     @output
@@ -2272,8 +2317,8 @@ def server(input, output, session):
             if is_default.get():
                 return ui.HTML(
                     '<div class="alert-box alert-info">'
-                    '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
-                    'not optimizer-generated, so preference satisfaction (65.2%) is lower than it could be. '
+                    '📋 <strong>Example schedule shown.</strong> This is a hand-built example rotation — '
+                    'not optimizer-generated, so preference satisfaction is lower than it could be. '
                     'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
                     'and see the real result.</div>'
                 )
@@ -2511,12 +2556,6 @@ def server(input, output, session):
 
 
     # ── AI Chat ──────────────────────────────────────────────────────
-
-    # chat_messages stores display history: [{"role": "user"|"assistant", "text": str}]
-    # api_history stores the API message format for multi-turn: [{"role":..,"content":..}]
-    chat_messages = reactive.value([])
-    api_history   = reactive.value([])
-    ai_insights   = reactive.value([])   # list of suggestion dicts from generate_schedule_insights
 
     @reactive.effect
     @reactive.event(input.chat_clear)
