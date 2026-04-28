@@ -478,7 +478,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         if sid != affected_shift_id:
             for e in wset:
                 if e in hours_elsewhere:
-                    hours_elsewhere[e] += _shift_hrs(s)
+                    hours_elsewhere[e] += _shift_hrs(sid)
 
     affected_day  = shift_day.get(affected_shift_id, "")
     affected_type = shift_type.get(affected_shift_id, "")
