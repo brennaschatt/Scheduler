@@ -1654,7 +1654,7 @@ app_ui = ui.page_fluid(
                         ui.div(style="height:12px;"),
                         ui.div(
                             ui.input_numeric("n_employees", "Number of employees",
-                                             value=6, min=1, max=MAX_EMPLOYEES, width="110px"),
+                                             value=18, min=1, max=MAX_EMPLOYEES, width="110px"),
                             ui.div(
                                 ui.input_action_button("apply_n_emp", "Apply",
                                                        class_="btn-outline-secondary btn-sm"),
