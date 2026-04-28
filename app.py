@@ -352,9 +352,20 @@ def _emp_val(emp_df_index, name, col, default=0):
 def _make_emp_index(emp_df):
     """Index emp_df by Name for O(1) column access."""
     return emp_df.set_index("Name")
+
+def _avail(emp_ix, e, col):
+    """Return availability value (0 or 1) from pre-indexed DataFrame."""
+    try: return int(emp_ix.at[e, col])
+    except: return 1
+
+def _pref(emp_ix, e, col):
+    """Return preference value (1-5) from pre-indexed DataFrame."""
+    try: return int(emp_ix.at[e, col])
+    except: return 3
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _rebuild_summary(emp_df, shift_df, sched_df, roles, shift_type, shift_hours_dict=None):
+    emp_ix = _make_emp_index(emp_df)
     employees = emp_df["Name"].tolist()
     shift_ids = shift_df["Shift_ID"].tolist()
     amap = {}
@@ -419,14 +430,6 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
 
     # Pre-index for O(1) lookups
     emp_ix = _make_emp_index(emp_df)
-
-    def _avail(e, col):
-        try: return int(emp_ix.at[e, col])
-        except: return 1
-
-    def _pref(e, col):
-        try: return int(emp_ix.at[e, col])
-        except: return 3
     if blocked_pairs is None:
         blocked_pairs = set()
 
@@ -516,7 +519,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
             continue
         if constraints.get("no_clopening", True) and e in clopening_blocked:
             continue
-        if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+        if constraints.get("availability", True) and _avail(emp_ix, e, avail_col) == 0:
             continue
         if constraints.get("max_hours", True):
             if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
@@ -539,7 +542,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
-            if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+            if constraints.get("availability", True) and _avail(emp_ix, e, avail_col) == 0:
                 reasons.append("marked unavailable")
             if constraints.get("max_hours", True):
                 if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
@@ -583,7 +586,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
         pc = f"{affected_shift_id}_Pref"
         pref = 1
         if pc in emp_df.columns:
-            pref = _pref(e, pc)
+            pref = _pref(emp_ix, e, pc)
         fills = any(r in ROLE_HIERARCHY.get(roles.get(e,""), []) for r in role_needs)
         return (0 if fills else 1, -pref)
 
@@ -626,7 +629,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
                 reasons.append("double shift (already working this day)")
             if e in clopening_blocked:
                 reasons.append("clopening (PM→next AM)")
-            if constraints.get("availability", True) and _avail(e, avail_col) == 0:
+            if constraints.get("availability", True) and _avail(emp_ix, e, avail_col) == 0:
                 reasons.append("marked unavailable")
             if constraints.get("max_hours", True):
                 if hours_elsewhere[e] + _shift_hrs(affected_shift_id) > max_hours[e]:
@@ -677,7 +680,7 @@ def resolve_callout(emp_df, shift_df, current_sched_df, absent_emp,
             still_avail = [e for e in employees
                            if e not in selected_names
                            and e not in blocked_for_shift
-                           and _avail(e, avail_col) == 1]
+                           and _avail(emp_ix, e, avail_col) == 1]
         else:
             still_avail = [e for e in employees
                            if e not in selected_names
@@ -716,6 +719,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
     # Precompute availability and preference dicts for O(1) lookup
     # instead of O(n) DataFrame.loc scans inside loops
     emp_index = emp_df.set_index("Name")
+    emp_ix = emp_index  # alias used by module-level _avail/_pref helpers
     avail_dict = {}   # {(emp, shift_id): 0|1}
     pref_dict  = {}   # {(emp, shift_id): int}
     for e in employees:
@@ -742,7 +746,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
             if avail_col in emp_df.columns:
                 q = [e for e in employees
                      if emp_role in ROLE_HIERARCHY.get(roles[e], [])
-                     and _avail(e, avail_col) == 1]
+                     and _avail(emp_ix, e, avail_col) == 1]
             else:
                 q = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
             if len(q) < needed:
@@ -888,7 +892,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
                 if constraints.get("availability", True) and avail_col in emp_df.columns:
                     pool = [e for e in employees
                             if emp_role in ROLE_HIERARCHY.get(roles[e], [])
-                            and _avail(e, avail_col) == 1]
+                            and _avail(emp_ix, e, avail_col) == 1]
                 else:
                     pool = [e for e in employees if emp_role in ROLE_HIERARCHY.get(roles[e], [])]
                 if len(pool) < needed:
@@ -963,7 +967,7 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
             not_scheduled = [
                 e for e in employees
                 if e not in assigned_names
-                and _avail(e, avail_col) == 1
+                and _avail(emp_ix, e, avail_col) == 1
             ]
         else:
             not_scheduled = [e for e in employees if e not in assigned_names]
@@ -998,12 +1002,12 @@ def build_schedule(emp_df, shift_df, constraints, shift_hours=None, shift_times=
         for s in assigned:
             pc = f"{s}_Pref"
             if pc in emp_df.columns:
-                pref_score += _pref(e, pc)
+                pref_score += _pref(emp_ix, e, pc)
         all_prefs = []
         for s in shift_ids:
             pc = f"{s}_Pref"
             if pc in emp_df.columns:
-                all_prefs.append(_pref(e, pc))
+                all_prefs.append(_pref(emp_ix, e, pc))
         max_pref = sum(sorted(all_prefs, reverse=True)[:n]) if n else 0
         summ_rows.append({
             "Name":            e,
