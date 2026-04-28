@@ -1792,7 +1792,7 @@ app_ui = ui.page_fluid(
                             ui.tags.tbody(
                                 ui.tags.tr(
                                     ui.tags.td("Avg Hours / Employee", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
-                                    ui.tags.td("Total assigned hours ÷ number of employees. Each shift = 6 hours.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
+                                    ui.tags.td("Total assigned hours ÷ number of employees.", style="padding:4px 0; font-size:12px; color:#6c757d;"),
                                 ),
                                 ui.tags.tr(
                                     ui.tags.td("Hours Std Dev (Fairness)", style="padding:4px 12px 4px 0; font-size:12px; white-space:nowrap; vertical-align:top; font-weight:500;"),
@@ -2447,8 +2447,8 @@ def server(input, output, session):
             if is_default.get():
                 return ui.HTML(
                     '<div class="alert-box alert-info">'
-                    '📋 <strong>Example schedule shown.</strong> This is a hand-built rotation — '
-                    'not optimizer-generated, so preference satisfaction (65.2%) is lower than it could be. '
+                    '📋 <strong>Example schedule shown.</strong> This is a hand-built example rotation — '
+                    'not optimizer-generated, so preference satisfaction is lower than it could be. '
                     'Click <strong>Generate Schedule</strong> in the sidebar to run the optimizer '
                     'and see the real result.</div>'
                 )
