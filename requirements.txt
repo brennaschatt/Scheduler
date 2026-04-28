@@ -1,4 +1,4 @@
-shiny
+shiny>=1.0.0
 pandas
 ortools
 openpyxl
