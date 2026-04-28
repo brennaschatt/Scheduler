@@ -1246,14 +1246,34 @@ def make_shift_form():
     for day in ALL_DAYS:
         is_default_open = (day != "Sun")
 
+        btn_label = "✅ Open" if is_default_open else "❌ Closed"
+        btn_style  = (
+            "padding:3px 10px; font-size:12px; font-weight:600; border-radius:12px; "
+            "cursor:pointer; border:1px solid; margin-left:8px; "
+            + ("background:#d1e7dd; color:#0f5132; border-color:#badbcc;" if is_default_open
+               else "background:#f8d7da; color:#842029; border-color:#f5c2c7;")
+        )
         day_header = ui.div(
-            ui.input_checkbox(f"open_{day}", "", value=is_default_open),
-            ui.div(
-                ui.tags.b(day),
-                ui.span(" — Open" if is_default_open else " — Closed",
-                        id=f"open_label_{day}",
-                        style="font-size:12px; color:#6c757d; margin-left:4px;"),
-                style="margin-left:6px; font-size:14px;"
+            # Hidden Shiny checkbox to keep the input ID working with server logic
+            ui.tags.div(
+                ui.input_checkbox(f"open_{day}", "", value=is_default_open),
+                style="display:none;"
+            ),
+            ui.tags.b(day, style="font-size:14px;"),
+            ui.tags.button(
+                btn_label,
+                id=f"open_btn_{day}",
+                onclick=f"""
+                    var cb = document.querySelector('#open_{day}');
+                    if (!cb) cb = document.querySelector('input[id="open_{day}"]');
+                    var isOpen = cb ? !cb.checked : true;
+                    if (cb) {{ cb.checked = isOpen; cb.dispatchEvent(new Event('change', {{bubbles:true}})); }}
+                    this.textContent = isOpen ? '✅ Open' : '❌ Closed';
+                    this.style.background = isOpen ? '#d1e7dd' : '#f8d7da';
+                    this.style.color = isOpen ? '#0f5132' : '#842029';
+                    this.style.borderColor = isOpen ? '#badbcc' : '#f5c2c7';
+                """,
+                style=btn_style
             ),
             style="display:flex; align-items:center; padding:6px 0 4px; "
                   "border-top:2px solid #e9ecef; margin-top:4px;"
@@ -1520,20 +1540,8 @@ app_ui = ui.page_fluid(
                     ui.nav_panel(
                         "📋 Shift Requirements",
                         ui.div(style="height:12px;"),
-                        ui.p("Set staffing requirements for each shift.",
+                        ui.p("Check each day your restaurant is open, then set staffing requirements per shift.",
                              style="font-size:13px; color:#6c757d;"),
-                        ui.hr(),
-                        ui.div(
-                            ui.tags.b("Open Days:", style="font-size:13px;"),
-                            ui.div(
-                                *[ui.div(
-                                    ui.input_checkbox(f"open_{d}", d, value=(d != "Sun")),
-                                    style="display:inline-block; margin-right:10px; font-size:13px;"
-                                ) for d in ALL_DAYS],
-                                style="display:flex; flex-wrap:wrap; margin-top:4px;"
-                            ),
-                            style="margin-bottom:12px;"
-                        ),
                         ui.hr(),
                         make_shift_form(),
                     ),
@@ -1751,9 +1759,13 @@ app_ui = ui.page_fluid(
 def server(input, output, session):
 
     # Switch to Schedule & Results tab on first load so user sees the example schedule
+    _init_done = reactive.value(False)
+
     @reactive.effect
     def _init_tab():
-        ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+        if not _init_done.get():
+            ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+            _init_done.set(True)
 
     @reactive.effect
     @reactive.event(input.reset_defaults)
@@ -2392,7 +2404,7 @@ def server(input, output, session):
         df = sched_store.get()
         if df.empty:
             return df
-        return render.DataGrid(df, width="100%")
+        return render.DataGrid(df, width="100%", filters=False)
 
     @output
     @render.data_frame
@@ -2401,7 +2413,7 @@ def server(input, output, session):
         if df.empty:
             return df
         cols = [c for c in df.columns if c not in ("Pref_Score", "Max_Pref_Score")]
-        return render.DataGrid(df[cols], width="100%")
+        return render.DataGrid(df[cols], width="100%", filters=False)
 
 
     # ── AI Chat ──────────────────────────────────────────────────────
@@ -2530,6 +2542,7 @@ def server(input, output, session):
             shift  = hist[-1]["shift"]
             suggestions.insert(0, f"Who could replace {absent} on {shift}?")
 
+        # Always show up to 5 suggestions
         pills = "".join(
             f'<button onclick="Shiny.setInputValue(\'chat_suggestion\', \'{s}\', {{priority: \'event\'}}); return false;" '
             f'style="margin:2px 3px; padding:3px 9px; font-size:11px; '
@@ -2538,7 +2551,7 @@ def server(input, output, session):
             for s in suggestions[:5]
         )
         return ui.HTML(
-            f'<div style="font-size:10px; color:#adb5bd; margin-bottom:3px;">Suggested:</div>'
+            '<div style="font-size:10px; color:#adb5bd; margin-bottom:3px;">Suggested:</div>'
             f'<div style="display:flex; flex-wrap:wrap;">{pills}</div>'
         )
 
