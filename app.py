@@ -1115,6 +1115,7 @@ LAST CHANGE: {change_log_text or "None"}"""
         messages = history_copy + [{"role": "user", "content": user_question}]
 
     try:
+        print(f"[API] model={ANTHROPIC_CHAT_MODEL} msgs={len(messages)} key={api_key[:12]}...")
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_CHAT_MODEL,
@@ -1122,8 +1123,10 @@ LAST CHANGE: {change_log_text or "None"}"""
             system=system_prompt,
             messages=messages
         )
+        print(f"[API] success, tokens used: {msg.usage}")
         return msg.content[0].text
     except Exception as e:
+        import traceback; traceback.print_exc()
         return f"❌ API error: {e}"
 
 
@@ -2627,27 +2630,19 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.chat_send)
     def handle_chat():
-        import threading, copy as _copy
+        import copy as _copy
 
         question = input.chat_input().strip()
         if not question:
             return
 
-        # Show user message + thinking indicator immediately
-        display = chat_messages.get() + [
-            {"role": "user",      "text": question},
-            {"role": "assistant", "text": "⏳ Thinking..."},
-        ]
-        chat_messages.set(display)
         ui.update_text("chat_input", value="")
 
-        # Snapshot all needed data before the thread starts
-        sched    = sched_store.get()
-        summ     = summ_store.get()
-        met      = metrics_store.get()
-        cl       = change_log.get()
-        hist     = _copy.deepcopy(api_history.get())
-        callouts = callout_history.get()
+        # Add user message to display
+        current_api = api_history.get()
+        chat_messages.set(chat_messages.get() + [{"role": "user", "text": question}])
+
+        # Make API call synchronously — Shiny will update UI after this returns
         constraints = {
             "Availability": input.availability(),
             "Max Hours":    input.max_hours(),
@@ -2655,40 +2650,36 @@ def server(input, output, session):
             "Fairness":     input.fairness(),
         }
 
-        def _call_api():
-            try:
-                response = ask_schedule_ai(
-                    user_question        = question,
-                    sched_df             = sched,
-                    summ_df              = summ,
-                    metrics              = met,
-                    change_log_text      = cl,
-                    conversation_history = hist if hist else None,
-                    active_constraints   = constraints,
-                    callout_history_list = callouts,
-                )
-            except Exception as e:
-                response = f"❌ Error: {e}"
+        try:
+            print(f"[CHAT] Calling API for: {question[:50]}")
+            response = ask_schedule_ai(
+                user_question        = question,
+                sched_df             = sched_store.get(),
+                summ_df              = summ_store.get(),
+                metrics              = metrics_store.get(),
+                change_log_text      = change_log.get(),
+                conversation_history = _copy.deepcopy(current_api) if current_api else None,
+                active_constraints   = constraints,
+                callout_history_list = callout_history.get(),
+            )
+            print(f"[CHAT] Got response: {str(response)[:80]}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            response = f"❌ Error: {e}"
 
-            # Update reactive state from background thread using invalidate
-            current_api = hist or []
-            with reactive.isolate():
-                msgs = chat_messages.get()
-                if msgs and msgs[-1].get("text") == "⏳ Thinking...":
-                    msgs = msgs[:-1]
-                chat_messages.set(msgs + [{"role": "assistant", "text": response}])
-                if not current_api:
-                    api_history.set([
-                        {"role": "user",      "content": question},
-                        {"role": "assistant", "content": response},
-                    ])
-                else:
-                    api_history.set(current_api + [
-                        {"role": "user",      "content": question},
-                        {"role": "assistant", "content": response},
-                    ])
+        chat_messages.set(chat_messages.get() + [{"role": "assistant", "text": response}])
 
-        threading.Thread(target=_call_api, daemon=True).start()
+        if not current_api:
+            api_history.set([
+                {"role": "user",      "content": question},
+                {"role": "assistant", "content": response},
+            ])
+        else:
+            api_history.set(current_api + [
+                {"role": "user",      "content": question},
+                {"role": "assistant", "content": response},
+            ])
 
     @output
     @render.ui
