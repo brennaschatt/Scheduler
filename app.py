@@ -2239,7 +2239,7 @@ def server(input, output, session):
             change_log.set("")
             callout_log.set(set())
             is_default.set(False)
-            run_optimization(emp, shift)
+            await run_optimization(emp, shift)
             ui.update_navs("main_tabs", selected="📅 Schedule & Results")
         except Exception as _e:
             import traceback
@@ -2634,8 +2634,9 @@ def server(input, output, session):
 
     @reactive.effect
     @reactive.event(input.generate_insights)
-    def _on_generate_insights():
+    async def _on_generate_insights():
         """Allow manager to manually re-run insights at any time."""
+        import asyncio
         sched = sched_store.get()
         summ  = summ_store.get()
         m     = metrics_store.get()
@@ -2644,7 +2645,10 @@ def server(input, output, session):
         ai_insights.set([{"issue": "⏳ Re-analyzing schedule...", "suggestion": "",
                           "action": "none", "emp_a": "", "shift_from": "",
                           "emp_b": "", "shift_to": ""}])
-        suggestions = generate_schedule_insights(sched, summ, m)
+        loop = asyncio.get_event_loop()
+        suggestions = await loop.run_in_executor(
+            None, lambda: generate_schedule_insights(sched, summ, m)
+        )
         ai_insights.set(suggestions if suggestions else [])
 
     @reactive.effect
@@ -2718,11 +2722,6 @@ def server(input, output, session):
 
         if not msgs:
             parts.append(
-                '<div style="font-size:12px; color:#6c757d; background:#fff3cd; '
-                'border:1px solid #ffc107; border-radius:6px; padding:8px 10px; margin-bottom:8px;">'
-                '⏱️ <strong>Heads up:</strong> Responses may take up to a minute — '
-                'the AI is reading the full schedule before answering. Thanks for your patience!'
-                '</div>'
                 '<div style="color:#adb5bd; font-size:13px;">'
                 'Ask a question about the schedule, or click a suggestion below.</div>'
             )
@@ -2809,5 +2808,7 @@ def server(input, output, session):
         df[cols].to_csv(buf, index=False)
         yield buf.getvalue()
 
+
+app = App(app_ui, server)
 
 app = App(app_ui, server)
