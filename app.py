@@ -2691,8 +2691,13 @@ def server(input, output, session):
 
         if not msgs:
             parts.append(
+                '<div style="font-size:12px; color:#6c757d; background:#fff3cd; '
+                'border:1px solid #ffc107; border-radius:6px; padding:8px 10px; margin-bottom:8px;">'
+                '⏱️ <strong>Heads up:</strong> Responses may take up to a minute — '
+                'the AI is reading the full schedule before answering. Thanks for your patience!'
+                '</div>'
                 '<div style="color:#adb5bd; font-size:13px;">'
-                'Ask a question about the schedule above, or click a suggestion below.</div>'
+                'Ask a question about the schedule, or click a suggestion below.</div>'
             )
         else:
             for m in msgs:
