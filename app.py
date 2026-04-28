@@ -1485,6 +1485,7 @@ app_ui = ui.page_fluid(
                 ui.output_ui("callout_banner"),
                 ui.output_ui("callout_history_panel"),
                 ui.output_ui("metrics_panel"),
+                ui.output_ui("insights_panel"),
 
                 ui.tags.details(
                     ui.tags.summary(
@@ -1549,36 +1550,97 @@ app_ui = ui.page_fluid(
                 ),
             ),
 
-            # ══ TAB C: AI ASSISTANT ════════════════════════════════════
-            ui.nav_panel(
-                "🤖 AI Assistant",
-                ui.div(style="height:14px;"),
-                ui.p("Ask questions about the schedule — who is working, fairness, replacements, and more.",
-                     style="color:#6c757d; font-size:13px; margin-bottom:10px;"),
-                ui.div(
-                    ui.output_ui("chat_history"),
-                    style="background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; "
-                          "padding:12px; min-height:200px; max-height:520px; overflow-y:auto; "
-                          "margin-bottom:10px; font-size:14px;"
-                ),
-                ui.div(
-                    ui.div(
-                        ui.input_text("chat_input", None,
-                                      placeholder="e.g. Who is working Monday AM?  Who has the fewest shifts?",
-                                      width="100%"),
-                        style="flex:1;"
-                    ),
-                    ui.div(
-                        ui.input_action_button("chat_send",  "Ask",   class_="btn-primary"),
-                        ui.input_action_button("chat_clear", "Clear", class_="btn-outline-secondary",
-                                               style="margin-left:6px;"),
-                        style="margin-left:8px; display:flex;"
-                    ),
-                    style="display:flex; align-items:flex-start;"
-                ),
-            ),
-
             id="main_tabs",
+        ),
+
+        # ── Floating AI chat widget — always visible regardless of tab ───────
+        ui.tags.div(
+            # Toggle button (bottom-right corner)
+            ui.tags.button(
+                "🤖 AI Assistant",
+                id="chat_toggle_btn",
+                onclick="toggleChat()",
+                style=(
+                    "position:fixed; bottom:24px; right:24px; z-index:1050; "
+                    "background:#0d6efd; color:#fff; border:none; border-radius:24px; "
+                    "padding:10px 20px; font-size:14px; font-weight:600; cursor:pointer; "
+                    "box-shadow:0 4px 12px rgba(0,0,0,0.2);"
+                )
+            ),
+            # Floating chat panel
+            ui.tags.div(
+                # Header bar
+                ui.tags.div(
+                    ui.tags.span("🤖 AI Schedule Assistant",
+                                 style="font-weight:600; font-size:14px; color:#fff;"),
+                    ui.tags.div(
+                        ui.tags.button("Clear", onclick="clearChat()",
+                            style="background:rgba(255,255,255,0.2); border:none; color:#fff; "
+                                  "border-radius:4px; padding:2px 8px; font-size:12px; cursor:pointer; margin-right:6px;"),
+                        ui.tags.button("✕", onclick="toggleChat()",
+                            style="background:none; border:none; color:#fff; font-size:16px; cursor:pointer; line-height:1;"),
+                        style="display:flex; align-items:center;"
+                    ),
+                    style="display:flex; justify-content:space-between; align-items:center; "
+                          "background:#0d6efd; padding:10px 14px; border-radius:12px 12px 0 0;"
+                ),
+                # Messages area
+                ui.tags.div(
+                    ui.output_ui("chat_history"),
+                    id="chat_messages_area",
+                    style="padding:12px; overflow-y:auto; height:340px; font-size:13px; background:#f8f9fa;"
+                ),
+                # Input area
+                ui.tags.div(
+                    ui.input_text("chat_input", None,
+                                  placeholder="Ask about the schedule...",
+                                  width="100%"),
+                    ui.tags.div(
+                        ui.input_action_button("chat_send", "Ask", class_="btn-primary btn-sm"),
+                        ui.input_action_button("chat_clear", "Clear", class_="btn-outline-secondary btn-sm",
+                                               style="margin-left:4px; display:none;"),
+                        style="margin-left:6px; display:flex; white-space:nowrap;"
+                    ),
+                    style="display:flex; align-items:center; padding:10px 12px; "
+                          "background:#fff; border-top:1px solid #dee2e6; border-radius:0 0 12px 12px;"
+                ),
+                id="chat_float_panel",
+                style=(
+                    "position:fixed; bottom:72px; right:24px; z-index:1049; "
+                    "width:380px; border-radius:12px; "
+                    "box-shadow:0 8px 32px rgba(0,0,0,0.18); "
+                    "display:none; flex-direction:column; "
+                    "border:1px solid #dee2e6; background:#fff;"
+                )
+            ),
+            # JS for toggle and auto-scroll
+            ui.tags.script("""
+                function toggleChat() {
+                    var panel = document.getElementById('chat_float_panel');
+                    var btn   = document.getElementById('chat_toggle_btn');
+                    if (panel.style.display === 'none' || panel.style.display === '') {
+                        panel.style.display = 'flex';
+                        btn.textContent = '✕ Close Chat';
+                        scrollChatToBottom();
+                    } else {
+                        panel.style.display = 'none';
+                        btn.textContent = '🤖 AI Assistant';
+                    }
+                }
+                function clearChat() {
+                    Shiny.setInputValue('chat_clear', Math.random(), {priority: 'event'});
+                }
+                function scrollChatToBottom() {
+                    var area = document.getElementById('chat_messages_area');
+                    if (area) area.scrollTop = area.scrollHeight;
+                }
+                // Auto-scroll when new messages appear
+                var chatObserver = new MutationObserver(scrollChatToBottom);
+                document.addEventListener('DOMContentLoaded', function() {
+                    var area = document.getElementById('chat_messages_area');
+                    if (area) chatObserver.observe(area, {childList: true, subtree: true});
+                });
+            """),
         ),
     )
 )
@@ -2062,6 +2124,21 @@ def server(input, output, session):
 
     @output
     @render.ui
+    def insights_panel():
+        insights = ai_insights.get()
+        if not insights:
+            return ui.HTML("")
+        return ui.HTML(
+            '<div style="background:#e8f4fd; border:1px solid #bee5fd; border-radius:8px; '
+            'padding:12px 16px; margin-bottom:14px; font-size:13px;">'
+            '<div style="font-weight:600; color:#0a558c; margin-bottom:6px; font-size:14px;">'
+            '🔍 Schedule Insights</div>'
+            f'<div style="white-space:pre-wrap; color:#1a4a6b; line-height:1.6;">{insights}</div>'
+            '</div>'
+        )
+
+    @output
+    @render.ui
     def callout_banner():
         log = change_log.get()
         if not log:
@@ -2205,21 +2282,8 @@ def server(input, output, session):
     @output
     @render.ui
     def chat_history():
-        msgs     = chat_messages.get()
-        insights = ai_insights.get()
-
+        msgs  = chat_messages.get()
         parts = []
-
-        # Proactive insights banner at top
-        if insights:
-            parts.append(
-                f'<div style="background:#e8f4fd; border:1px solid #bee5fd; border-radius:6px; '
-                f'padding:10px 12px; margin-bottom:12px; font-size:13px;">'
-                f'<div style="font-weight:600; color:#0a558c; margin-bottom:4px;">'
-                f'🔍 Schedule Insights</div>'
-                f'<div style="white-space:pre-wrap; color:#1a4a6b;">{insights}</div>'
-                f'</div>'
-            )
 
         if not msgs:
             parts.append(
