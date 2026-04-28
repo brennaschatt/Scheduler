@@ -2627,61 +2627,68 @@ def server(input, output, session):
     @reactive.effect
     @reactive.event(input.chat_send)
     def handle_chat():
+        import threading, copy as _copy
+
         question = input.chat_input().strip()
         if not question:
             return
 
         # Show user message + thinking indicator immediately
         display = chat_messages.get() + [
-            {"role": "user", "text": question},
+            {"role": "user",      "text": question},
             {"role": "assistant", "text": "⏳ Thinking..."},
         ]
         chat_messages.set(display)
         ui.update_text("chat_input", value="")
 
-        # Build active constraints dict for context
-        active_constraints = {
-            "Availability":  input.availability(),
-            "Max Hours":     input.max_hours(),
-            "No Clopening":  input.no_clopening(),
-            "Fairness":      input.fairness(),
+        # Snapshot all needed data before the thread starts
+        sched    = sched_store.get()
+        summ     = summ_store.get()
+        met      = metrics_store.get()
+        cl       = change_log.get()
+        hist     = _copy.deepcopy(api_history.get())
+        callouts = callout_history.get()
+        constraints = {
+            "Availability": input.availability(),
+            "Max Hours":    input.max_hours(),
+            "No Clopening": input.no_clopening(),
+            "Fairness":     input.fairness(),
         }
 
-        # Convert display history to API format for multi-turn
-        current_api = api_history.get()
+        def _call_api():
+            try:
+                response = ask_schedule_ai(
+                    user_question        = question,
+                    sched_df             = sched,
+                    summ_df              = summ,
+                    metrics              = met,
+                    change_log_text      = cl,
+                    conversation_history = hist if hist else None,
+                    active_constraints   = constraints,
+                    callout_history_list = callouts,
+                )
+            except Exception as e:
+                response = f"❌ Error: {e}"
 
-        try:
-            import copy as _copy
-            response = ask_schedule_ai(
-                user_question        = question,
-                sched_df             = sched_store.get(),
-                summ_df              = summ_store.get(),
-                metrics              = metrics_store.get(),
-                change_log_text      = change_log.get(),
-                conversation_history = _copy.deepcopy(current_api) if current_api else None,
-                active_constraints   = active_constraints,
-                callout_history_list = callout_history.get(),
-            )
-        except Exception as e:
-            response = f"❌ Error generating response: {e}"
+            # Update reactive state from background thread using invalidate
+            current_api = hist or []
+            with reactive.isolate():
+                msgs = chat_messages.get()
+                if msgs and msgs[-1].get("text") == "⏳ Thinking...":
+                    msgs = msgs[:-1]
+                chat_messages.set(msgs + [{"role": "assistant", "text": response}])
+                if not current_api:
+                    api_history.set([
+                        {"role": "user",      "content": question},
+                        {"role": "assistant", "content": response},
+                    ])
+                else:
+                    api_history.set(current_api + [
+                        {"role": "user",      "content": question},
+                        {"role": "assistant", "content": response},
+                    ])
 
-        # Replace thinking indicator with real response
-        msgs = chat_messages.get()
-        if msgs and msgs[-1].get("text") == "⏳ Thinking...":
-            msgs = msgs[:-1]  # remove thinking indicator
-        chat_messages.set(msgs + [{"role": "assistant", "text": response}])
-
-        # Update API history for next turn (store clean versions without context block)
-        if not current_api:
-            api_history.set([
-                {"role": "user",      "content": question},
-                {"role": "assistant", "content": response},
-            ])
-        else:
-            api_history.set(current_api + [
-                {"role": "user",      "content": question},
-                {"role": "assistant", "content": response},
-            ])
+        threading.Thread(target=_call_api, daemon=True).start()
 
     @output
     @render.ui
