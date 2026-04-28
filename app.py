@@ -1055,61 +1055,123 @@ LATEST CALLOUT CHANGE:
 
 
 def generate_schedule_insights(sched_df, summ_df, metrics):
-    """Auto-generate proactive insights after a schedule is created."""
+    """
+    Returns a list of actionable suggestions, each a dict:
+      {
+        "issue":      str,   # what the problem is
+        "suggestion": str,   # what to do about it
+        "action":     str,   # "swap" | "move" | "none"
+        "emp_a":      str,   # employee to move/swap (or "")
+        "shift_from": str,   # shift they are currently on (or "")
+        "emp_b":      str,   # employee to swap with (or "")
+        "shift_to":   str,   # shift to move to / swap to (or "")
+      }
+    Returns None on error.
+    """
     if _anthropic_mod is None or sched_df is None or sched_df.empty:
         return None
-    import os as _os2
+    import os as _os2, json, re
     api_key = _os2.environ.get("ANTHROPIC_API_KEY", "") or ANTHROPIC_API_KEY
     if not api_key or api_key == "your-api-key-here":
         return None
 
     metrics_text = "\n".join(f"  {k}: {v}" for k, v in metrics.items()) if metrics else ""
-
-    # Only send the staffing columns — exclude "Available (Not Scheduled)" which
-    # Claude misreads as empty shifts. Role columns ARE the assigned staff.
     staffing_cols = [c for c in sched_df.columns if c != "Available (Not Scheduled)"]
-    sched_clean = sched_df[staffing_cols].to_string(index=False)
+    sched_clean   = sched_df[staffing_cols].to_string(index=False)
+    summ_cols     = [c for c in (summ_df.columns if summ_df is not None else [])
+                     if c not in ("Pref_Score", "Max_Pref_Score", "Assigned Shifts")]
+    summ_clean    = summ_df[summ_cols].to_string(index=False) if summ_df is not None and not summ_df.empty else ""
 
-    # Employee summary without internal score columns
-    summ_cols = [c for c in (summ_df.columns if summ_df is not None else [])
-                 if c not in ("Pref_Score", "Max_Pref_Score", "Assigned Shifts")]
-    summ_clean = summ_df[summ_cols].to_string(index=False) if summ_df is not None and not summ_df.empty else ""
+    # Valid shift IDs for action validation
+    valid_shifts = sched_df["Shift"].tolist() if "Shift" in sched_df.columns else []
+    valid_employees = summ_df["Name"].tolist() if summ_df is not None and "Name" in summ_df.columns else []
 
-    prompt = f"""You are a restaurant scheduling expert. Review this schedule and give 2-3 brief, specific insights a manager should know.
+    prompt = f"""You are a restaurant scheduling expert. Analyze this schedule and suggest up to 3 specific, actionable improvements.
 
-IMPORTANT COLUMN GUIDE:
-- Manager(s), Lead Server(s), Server(s), Host(s) = employees ASSIGNED to that shift
-- These columns show who IS working — every shift is fully staffed
-- Focus on: hours fairness, preference satisfaction, heavy/light workloads, employees with low Pref %
+COLUMN GUIDE: Manager(s), Lead Server(s), Server(s), Host(s) = employees ASSIGNED. Every shift is fully staffed.
+Focus on: fairness (hours imbalance), preference satisfaction (low Pref %), employees over/underworked.
+Do NOT suggest changes that would leave a shift without required role coverage.
 
-Do NOT flag coverage gaps — every shift is confirmed fully staffed.
-Be concise — one sentence per insight. No markdown headers. Use plain bullet points starting with "-".
-
-WEEKLY SCHEDULE (assigned staff per shift):
+WEEKLY SCHEDULE:
 {sched_clean}
 
 EMPLOYEE SUMMARY:
 {summ_clean}
 
 METRICS:
-{metrics_text}"""
+{metrics_text}
+
+VALID SHIFT IDs: {', '.join(valid_shifts)}
+VALID EMPLOYEE NAMES: {', '.join(valid_employees)}
+
+Respond ONLY with a JSON array, no other text. Each element must be exactly:
+{{
+  "issue": "one sentence describing the problem",
+  "suggestion": "one sentence describing the fix",
+  "action": "swap" or "move" or "none",
+  "emp_a": "employee name or empty string",
+  "shift_from": "shift ID or empty string",
+  "emp_b": "employee name to swap with or empty string",
+  "shift_to": "destination shift ID or empty string"
+}}
+
+For "swap": emp_a on shift_from swaps with emp_b on shift_to.
+For "move": emp_a moves from shift_from to shift_to (shift_to must have an open slot or emp_b vacates it).
+For "none": informational only — no automated change possible.
+Only use exact names and shift IDs from the lists above."""
 
     try:
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_MODEL,
-            max_tokens=300,
+            max_tokens=600,
             messages=[{"role": "user", "content": prompt}]
         )
-        # Strip markdown formatting (##, **, etc.)
-        import re
-        text = msg.content[0].text
-        text = re.sub(r"#{1,3}\s*", "", text)          # remove ## headers
-        text = re.sub(r"\*\*(.+?)\*\*", r"\1", text) # remove **bold**
-        text = re.sub(r"\*(.+?)\*",   r"\1", text)    # remove *italic*
-        return text.strip()
+        raw = msg.content[0].text.strip()
+        # Extract JSON array
+        m = re.search(r"\[.*\]", raw, re.DOTALL)
+        if not m:
+            return None
+        suggestions = json.loads(m.group())
+        return suggestions if isinstance(suggestions, list) else None
     except Exception:
         return None
+
+
+def apply_insight_swap(sched_df, emp_a, shift_from, emp_b, shift_to, roles):
+    """
+    Swap emp_a (on shift_from) with emp_b (on shift_to).
+    Returns updated sched_df or None if swap is invalid.
+    """
+    import copy
+    df = sched_df.copy()
+    role_cols = ["Manager(s)", "Lead Server(s)", "Server(s)", "Host(s)"]
+
+    def get_emp_role_col(df, shift, emp):
+        row = df[df["Shift"] == shift]
+        if row.empty: return None
+        for col in role_cols:
+            val = str(row.iloc[0].get(col, ""))
+            if emp in [n.strip().rstrip("*") for n in val.split(",")]:
+                return col
+        return None
+
+    def replace_in_col(df, shift, col, old_emp, new_emp):
+        mask = df["Shift"] == shift
+        val  = str(df.loc[mask, col].values[0])
+        names = [n.strip() for n in val.split(",") if n.strip() != "—"]
+        new_names = [new_emp if n.rstrip("*").strip() == old_emp else n for n in names]
+        df.loc[mask, col] = ", ".join(new_names) if new_names else "—"
+        return df
+
+    col_a = get_emp_role_col(df, shift_from, emp_a)
+    col_b = get_emp_role_col(df, shift_to,   emp_b)
+    if not col_a or not col_b:
+        return None
+
+    df = replace_in_col(df, shift_from, col_a, emp_a, emp_b)
+    df = replace_in_col(df, shift_to,   col_b, emp_b, emp_a)
+    return df
 
 
 DEFAULT_EMP_DATA = [
@@ -1454,27 +1516,7 @@ app_ui = ui.page_fluid(
                 ui.output_ui("status_banner"),
 
                 ui.navset_tab(
-                    # Employee sub-tab
-                    ui.nav_panel(
-                        "👥 Employees",
-                        ui.div(style="height:12px;"),
-                        ui.div(
-                            ui.input_numeric("n_employees", "Number of employees",
-                                             value=6, min=1, max=MAX_EMPLOYEES, width="110px"),
-                            ui.div(
-                                ui.input_action_button("apply_n_emp", "Apply",
-                                                       class_="btn-outline-secondary btn-sm"),
-                                style="margin-top:22px; margin-left:10px;"
-                            ),
-                            style="display:flex; align-items:flex-start;"
-                        ),
-                        ui.p("✔ = Available  |  ★ = Preference (1 low → 5 high)",
-                             style="font-size:11px; color:#6c757d; margin:8px 0 4px;"),
-                        ui.hr(),
-                        ui.output_ui("employee_table"),
-                    ),
-
-                    # Shift requirements sub-tab
+                    # Shift requirements sub-tab (first)
                     ui.nav_panel(
                         "📋 Shift Requirements",
                         ui.div(style="height:12px;"),
@@ -1496,6 +1538,26 @@ app_ui = ui.page_fluid(
                         make_shift_form(),
                     ),
 
+                    # Employee sub-tab (second)
+                    ui.nav_panel(
+                        "👥 Employees",
+                        ui.div(style="height:12px;"),
+                        ui.div(
+                            ui.input_numeric("n_employees", "Number of employees",
+                                             value=6, min=1, max=MAX_EMPLOYEES, width="110px"),
+                            ui.div(
+                                ui.input_action_button("apply_n_emp", "Apply",
+                                                       class_="btn-outline-secondary btn-sm"),
+                                style="margin-top:22px; margin-left:10px;"
+                            ),
+                            style="display:flex; align-items:flex-start;"
+                        ),
+                        ui.p("✔ = Available  |  ★ = Preference (1 low → 5 high)",
+                             style="font-size:11px; color:#6c757d; margin:8px 0 4px;"),
+                        ui.hr(),
+                        ui.output_ui("employee_table"),
+                    ),
+
                     id="setup_tabs",
                 ),
             ),
@@ -1509,7 +1571,14 @@ app_ui = ui.page_fluid(
                 ui.output_ui("callout_banner"),
                 ui.output_ui("callout_history_panel"),
                 ui.output_ui("metrics_panel"),
-                ui.output_ui("insights_panel"),
+                ui.div(
+                    ui.input_action_button(
+                        "generate_insights", "🔍 Generate Schedule Insights",
+                        class_="btn-outline-primary btn-sm",
+                        style="margin-bottom:10px;"
+                    ),
+                    ui.output_ui("insights_panel"),
+                ),
 
                 ui.tags.details(
                     ui.tags.summary(
@@ -1975,6 +2044,7 @@ def server(input, output, session):
         change_log.set("")
         callout_log.set(set())
         is_default.set(False)
+        ai_insights.set([])   # clear stale insights when new schedule generated
         run_optimization(emp, shift)
         # Auto-navigate to results tab so manager sees the schedule immediately
         ui.update_navs("main_tabs", selected="📅 Schedule & Results")
@@ -2154,17 +2224,120 @@ def server(input, output, session):
     @output
     @render.ui
     def insights_panel():
-        insights = ai_insights.get()
-        if not insights:
+        suggestions = ai_insights.get()
+        if not suggestions:
             return ui.HTML("")
-        return ui.HTML(
-            '<div style="background:#e8f4fd; border:1px solid #bee5fd; border-radius:8px; '
-            'padding:12px 16px; margin-bottom:14px; font-size:13px;">'
-            '<div style="font-weight:600; color:#0a558c; margin-bottom:6px; font-size:14px;">'
-            '🔍 Schedule Insights</div>'
-            f'<div style="white-space:pre-wrap; color:#1a4a6b; line-height:1.6;">{insights}</div>'
-            '</div>'
+
+        cards = []
+        for i, s in enumerate(suggestions):
+            issue      = s.get("issue", "")
+            suggestion = s.get("suggestion", "")
+            action     = s.get("action", "none")
+            emp_a      = s.get("emp_a", "")
+            shift_from = s.get("shift_from", "")
+            emp_b      = s.get("emp_b", "")
+            shift_to   = s.get("shift_to", "")
+            applied    = s.get("applied", False)
+
+            # Loading card
+            if "⏳" in issue:
+                cards.append(
+                    '<div style="padding:10px; color:#6c757d; font-style:italic;">'
+                    + issue + '</div>'
+                )
+                continue
+
+            # Action description
+            if action == "swap" and emp_a and emp_b:
+                action_html = (
+                    f'<div style="font-size:12px; color:#495057; margin:4px 0 6px; '
+                    f'background:#f8f9fa; padding:4px 8px; border-radius:4px; font-family:monospace;">'
+                    f'Swap: <b>{emp_a}</b> ({shift_from}) ↔ <b>{emp_b}</b> ({shift_to})'
+                    f'</div>'
+                )
+            elif action == "move" and emp_a:
+                action_html = (
+                    f'<div style="font-size:12px; color:#495057; margin:4px 0 6px; '
+                    f'background:#f8f9fa; padding:4px 8px; border-radius:4px; font-family:monospace;">'
+                    f'Move: <b>{emp_a}</b> from {shift_from} → {shift_to}'
+                    f'</div>'
+                )
+            else:
+                action_html = ""
+
+            # Apply button or Applied badge
+            if applied:
+                btn_html = '<span style="color:#198754; font-size:12px; font-weight:600;">✅ Applied</span>'
+            elif action in ("swap", "move") and emp_a:
+                btn_html = (
+                    f'<button onclick="Shiny.setInputValue(\'apply_insight_{i}\', '
+                    f'Math.random(), {{priority: \'event\'}});" '
+                    f'style="background:#0d6efd; color:#fff; border:none; border-radius:4px; '
+                    f'padding:4px 12px; font-size:12px; cursor:pointer; font-weight:500;">'
+                    f'Apply Change</button>'
+                )
+            else:
+                btn_html = '<span style="font-size:11px; color:#adb5bd;">Informational only</span>'
+
+            cards.append(
+                f'<div style="background:#fff; border:1px solid #bee5fd; border-radius:6px; '
+                f'padding:10px 12px; margin-bottom:8px;">'
+                f'<div style="font-size:13px; color:#1a4a6b; font-weight:500; margin-bottom:3px;">{issue}</div>'
+                f'<div style="font-size:12px; color:#495057; margin-bottom:4px;">{suggestion}</div>'
+                + action_html +
+                f'<div style="margin-top:6px;">{btn_html}</div>'
+                f'</div>'
+            )
+
+        return ui.div(
+            ui.HTML(
+                '<div style="background:#e8f4fd; border:1px solid #bee5fd; border-radius:8px; '
+                'padding:12px 16px; margin-bottom:14px;">'
+                '<div style="font-weight:600; color:#0a558c; margin-bottom:8px; font-size:14px;">'
+                '🔍 Schedule Insights & Suggested Changes</div>'
+                + "".join(cards) +
+                '</div>'
+            )
         )
+
+    # Apply insight suggestion buttons
+    for _idx in range(3):
+        def _make_apply_handler(idx):
+            @reactive.effect
+            def _handler():
+                btn_id = f"apply_insight_{idx}"
+                try:
+                    val = input[btn_id]()
+                except:
+                    return
+                if not val:
+                    return
+                suggestions = ai_insights.get()
+                if idx >= len(suggestions):
+                    return
+                s = suggestions[idx]
+                if s.get("action") not in ("swap", "move"):
+                    return
+                emp_a      = s.get("emp_a", "")
+                shift_from = s.get("shift_from", "")
+                emp_b      = s.get("emp_b", "")
+                shift_to   = s.get("shift_to", "")
+                sched = sched_store.get()
+                summ  = summ_store.get()
+                if sched.empty or not emp_a or not shift_from:
+                    return
+                roles_map = {}
+                if summ is not None and not summ.empty and "Name" in summ.columns:
+                    roles_map = dict(zip(summ["Name"], summ["Role"]))
+                new_sched = apply_insight_swap(sched, emp_a, shift_from, emp_b, shift_to, roles_map)
+                if new_sched is not None:
+                    sched_store.set(new_sched)
+                    # Mark this suggestion as applied
+                    updated = list(suggestions)
+                    updated[idx] = {**s, "applied": True}
+                    ai_insights.set(updated)
+            return _handler
+        _make_apply_handler(_idx)
 
     @output
     @render.ui
@@ -2237,7 +2410,7 @@ def server(input, output, session):
     # api_history stores the API message format for multi-turn: [{"role":..,"content":..}]
     chat_messages = reactive.value([])
     api_history   = reactive.value([])
-    ai_insights   = reactive.value("")   # proactive insights shown at top of chat
+    ai_insights   = reactive.value([])   # list of suggestion dicts from generate_schedule_insights
 
     @reactive.effect
     @reactive.event(input.chat_clear)
@@ -2245,18 +2418,21 @@ def server(input, output, session):
         chat_messages.set([])
         api_history.set([])
 
-    # Auto-generate insights when a NEW schedule is generated
+    # insights_loading tracks whether insights are being generated
+    insights_loading = reactive.value(False)
+
     @reactive.effect
-    def _generate_insights():
+    @reactive.event(input.generate_insights)
+    def _on_generate_insights():
         sched = sched_store.get()
         summ  = summ_store.get()
         m     = metrics_store.get()
-        if sched.empty or is_default.get():
-            ai_insights.set("")
+        if sched.empty:
             return
-        insight = generate_schedule_insights(sched, summ, m)
-        if insight:
-            ai_insights.set(insight)
+        ai_insights.set([{"issue": "⏳ Analyzing schedule...", "suggestion": "", "action": "none",
+                           "emp_a": "", "shift_from": "", "emp_b": "", "shift_to": ""}])
+        suggestions = generate_schedule_insights(sched, summ, m)
+        ai_insights.set(suggestions if suggestions else [])
 
     @reactive.effect
     @reactive.event(input.chat_send)
