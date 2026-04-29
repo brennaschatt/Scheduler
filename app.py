@@ -1163,7 +1163,7 @@ LAST CHANGE: {change_log_text or "None"}"""
         client = _anthropic_mod.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=ANTHROPIC_CHAT_MODEL,
-            max_tokens=250,
+            max_tokens=200,
             system=system_prompt,
             messages=messages
         )
@@ -1600,7 +1600,7 @@ def make_employee_table(n, open_days=None, defaults=None):
                     ),
                     style=td_sel
                 ))
-        row_bg = "background:#e5e7eb;" if i % 2 == 1 else "background:#ffffff;"
+        row_bg = "background:#f9f9f9;" if i % 2 == 1 else "background:#ffffff;"
         data_rows.append(ui.tags.tr(*tds, style=row_bg))
 
     return ui.div(
@@ -1974,6 +1974,9 @@ app_ui = ui.page_fluid(
 
 def server(input, output, session):
 
+    # Show a friendly reconnect message on session end
+    session.on_ended(lambda: None)  # keeps session alive longer
+
     # ── All reactive state declared first so every handler can reference any of them ──
     _init_done      = reactive.value(False)
     sched_store     = reactive.value(DEFAULT_SCHED_DF.copy())
@@ -1996,7 +1999,7 @@ def server(input, output, session):
     @reactive.effect
     def _init_tab():
         if not _init_done.get():
-            ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+            ui.update_navset("main_tabs", selected="📅 Schedule & Results")
             _init_done.set(True)
 
     @reactive.effect
@@ -2226,9 +2229,18 @@ def server(input, output, session):
         sh = shift_hours.get()
         # Run heavy solver in thread pool so UI stays responsive
         loop = asyncio.get_event_loop()
-        sched, summ, errs = await loop.run_in_executor(
-            None, lambda: build_schedule(emp_df, shift_df, constraints, shift_hours=sh)
-        )
+        await asyncio.sleep(0)  # yield before heavy computation
+        try:
+            sched, summ, errs = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, lambda: build_schedule(emp_df, shift_df, constraints, shift_hours=sh)
+                ),
+                timeout=55.0
+            )
+        except asyncio.TimeoutError:
+            sched_store.set(pd.DataFrame())
+            error_msgs.set(["❌ Schedule generation timed out (55s). Try reducing open days or unchecking Fairness constraint."])
+            return
         sched_store.set(sched)
         summ_store.set(summ)
         error_msgs.set(errs)
@@ -2304,7 +2316,7 @@ def server(input, output, session):
             # Reset callout dropdowns to blank
             ui.update_select("shift_sel", choices=[], selected=None)
             await run_optimization(emp, shift)
-            ui.update_navs("main_tabs", selected="📅 Schedule & Results")
+            ui.update_navset("main_tabs", selected="📅 Schedule & Results")
         except Exception as _e:
             import traceback
             error_msgs.set([f"❌ Unexpected error: {_e}. Check the Setup tab for missing data."])
@@ -2745,22 +2757,28 @@ def server(input, output, session):
         hist     = _copy.deepcopy(current_api) if current_api else None
         callouts = callout_history.get()
 
-        # Run blocking API call in executor so event loop stays free
+        # Run blocking API call in executor — yield first so keepalive pings work
         loop = asyncio.get_event_loop()
+        await asyncio.sleep(0)
         try:
-            response = await loop.run_in_executor(
-                None,
-                lambda: ask_schedule_ai(
-                    user_question        = question,
-                    sched_df             = sched,
-                    summ_df              = summ,
-                    metrics              = met,
-                    change_log_text      = cl,
-                    conversation_history = hist,
-                    active_constraints   = constraints,
-                    callout_history_list = callouts,
-                )
+            response = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: ask_schedule_ai(
+                        user_question        = question,
+                        sched_df             = sched,
+                        summ_df              = summ,
+                        metrics              = met,
+                        change_log_text      = cl,
+                        conversation_history = hist,
+                        active_constraints   = constraints,
+                        callout_history_list = callouts,
+                    )
+                ),
+                timeout=55.0
             )
+        except asyncio.TimeoutError:
+            response = "❌ Response timed out. Please try a shorter question."
         except Exception as e:
             response = f"❌ Error: {e}"
 
